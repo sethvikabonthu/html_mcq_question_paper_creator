@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCQ Question Paper Builder</title>
+
+    <!-- KaTeX for math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js">
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js">
+    </script>
+
+    <!-- jsPDF for PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js">
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js">
+    </script>
+
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+    <!-- ─── Header ─── -->
+    <header class="app-header">
+        <h1>
+            📝 MCQ Builder
+            <small>v2.0</small>
+        </h1>
+        <div class="header-actions">
+            <button onclick="importJSON()">📂 Import JSON</button>
+            <button onclick="exportAllJSON()">💾 Export All</button>
+            <button onclick="clearAllData()" style="color:#f87171;">🗑️ Clear Data</button>
+        </div>
+    </header>
+
+    <!-- ─── Body ─── -->
+    <div class="app-body">
+
+        <!-- Left Panel -->
+        <aside class="left-panel">
+            <div class="panel-header">
+                <h3>📋 Question Papers</h3>
+                <button class="btn-add-paper" onclick="createNewPaper()">+ New</button>
+            </div>
+            <div class="paper-list" id="paperList">
+                <!-- dynamically rendered -->
+            </div>
+        </aside>
+
+        <!-- Main Editor -->
+        <main class="main-editor" id="mainEditor">
+            <!-- dynamically rendered -->
+        </main>
+    </div>
+
+    <!-- ─── Reuse Modal ─── -->
+    <div class="modal-overlay hidden" id="reuseModal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3>📥 Reuse Questions</h3>
+                <button class="close-modal" onclick="closeReuseModal()">✕</button>
+            </div>
+            <div class="modal-body" id="reuseModalBody">
+                <!-- rendered -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeReuseModal()">Cancel</button>
+                <button class="btn-primary" onclick="applyReuseQuestions()">Add Selected</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Toast ─── -->
+    <div class="toast" id="toast"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>

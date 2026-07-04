@@ -1,1003 +1,997 @@
-// ═══════════════════════════════════════════════════════════════
-//  STATE
-// ═══════════════════════════════════════════════════════════════
+const STORAGE_KEY = 'school_mcq_paper_studio_v1';
+const LABELS = ['A', 'B', 'C', 'D'];
+const LAYOUTS = [
+    { id: 'row', label: '1x4' },
+    { id: 'grid2', label: '2x2' },
+    { id: 'column', label: '4x1' },
+];
 
 let state = {
-    papers: [], // { id, name, sections: [{ id, name, questions: [{ id, text, options: [{ id, text, isCorrect }], images: { q: null, opts: [null,null,null,null] } }] }] }
+    papers: [],
     activePaperId: null,
     activeSectionId: null,
-    optionLayout: 'row', // 'row' | 'column' | 'grid2'
-    reuseTargetSectionId: null,
-    reuseSelected: [],
 };
 
-const STORAGE_KEY = 'mcq_builder_data';
-const LAYOUT_KEY = 'mcq_builder_layout';
+const els = {
+    paperList: document.getElementById('paperList'),
+    paperSetup: document.getElementById('paperSetup'),
+    sectionTabs: document.getElementById('sectionTabs'),
+    workbench: document.getElementById('questionWorkbench'),
+    teacherPanel: document.getElementById('teacherPanel'),
+    toast: document.getElementById('toast'),
+    fileInput: document.getElementById('fileInput'),
+};
 
-// ─── Load from localStorage ───
-function loadState() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
+document.getElementById('newPaperBtn').addEventListener('click', createPaper);
+document.getElementById('importBtn').addEventListener('click', () => els.fileInput.click());
+document.getElementById('exportBtn').addEventListener('click', exportBackup);
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+document.getElementById('wordBtn').addEventListener('click', exportWord);
+els.fileInput.addEventListener('change', importBackup);
+
+document.addEventListener('paste', handlePaste);
+
+load();
+render();
+
+function load() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
         try {
-            state.papers = JSON.parse(saved);
-            // ensure each question has images object
-            state.papers.forEach(p => {
-                p.sections.forEach(s => {
-                    s.questions.forEach(q => {
-                        if (!q.images) q.images = { q: null, opts: [null, null, null,
-                            null
-                        ] };
-                        if (!q.options) q.options = [];
-                        q.options.forEach((o, i) => {
-                            if (!o.id) o.id = 'opt_' + Date.now() + '_' + i;
-                        });
-                    });
-                });
+            state = JSON.parse(raw);
+        } catch (err) {
+            state = { papers: [], activePaperId: null, activeSectionId: null };
+        }
+    }
+    if (!state.papers.length) {
+        const paper = samplePaper();
+        state.papers = [paper];
+        state.activePaperId = paper.id;
+        state.activeSectionId = paper.sections[0].id;
+    }
+    normalize();
+}
+
+function save() {
+    normalize();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function normalize() {
+    state.papers.forEach(paper => {
+        paper.meta ||= {};
+        paper.sections ||= [];
+        paper.sections.forEach(section => {
+            section.questions ||= [];
+            section.questions.forEach(question => {
+                question.options ||= [];
+                question.layout = ['row', 'grid2', 'column'].includes(question.layout) ? question.layout : 'row';
+                while (question.options.length < 4) {
+                    question.options.push(newOption(question.options.length));
+                }
+                question.options = question.options.slice(0, 4);
+                if (!Number.isInteger(question.correctIndex)) question.correctIndex = 0;
             });
-        } catch (e) { state.papers = []; }
-    }
-    const layout = localStorage.getItem(LAYOUT_KEY);
-    if (layout && ['row', 'column', 'grid2'].includes(layout)) {
-        state.optionLayout = layout;
-    }
-    if (state.papers.length === 0) {
-        // seed with a sample paper
-        state.papers = [createSamplePaper()];
-    }
-    if (state.papers.length > 0 && !state.activePaperId) {
-        state.activePaperId = state.papers[0].id;
-    }
-    // ensure active section
-    const activePaper = state.papers.find(p => p.id === state.activePaperId);
-    if (activePaper && activePaper.sections.length > 0 && !state.activeSectionId) {
-        state.activeSectionId = activePaper.sections[0].id;
+        });
+    });
+    const activePaper = getActivePaper();
+    if (!activePaper && state.papers[0]) state.activePaperId = state.papers[0].id;
+    const paper = getActivePaper();
+    if (paper && !paper.sections.find(s => s.id === state.activeSectionId)) {
+        state.activeSectionId = paper.sections[0]?.id || null;
     }
 }
 
-function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.papers));
-    localStorage.setItem(LAYOUT_KEY, state.optionLayout);
+function samplePaper() {
+    const math = {
+        id: uid('section'),
+        name: 'Mathematics',
+        questions: [
+            newQuestion('Two circles having same _____ are called concentric circles', ['Center', 'radius', 'arc', 'segment'], 0),
+            newQuestion('Degree measure of a circle is _____ degrees', ['90', '180', '270', '360'], 3),
+            newQuestion('If a line intersect a circle in two distinct points, then it is called', ['Secant', 'tangent', 'median', 'altitude'], 0),
+        ],
+    };
+    const paper = {
+        id: uid('paper'),
+        title: 'Sample Paper - IX IIT',
+        meta: {
+            className: 'IX',
+            subject: 'MPCM',
+            testName: 'IIT Test 10',
+            duration: '1:20 hr',
+            marks: '180',
+            instructions: 'Choose the correct answer. Use pasted images or \\(LaTeX\\) where needed.',
+        },
+        sections: [math],
+    };
+    return paper;
 }
 
-// ─── Sample Paper ───
-function createSamplePaper() {
+function uid(prefix) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function newQuestion(text = '', options = ['', '', '', ''], correctIndex = 0) {
     return {
-        id: 'paper_' + Date.now(),
-        name: 'Sample Paper - IX IIT',
-        sections: [{
-            id: 'sec_' + Date.now() + '_1',
-            name: 'Mathematics',
-            questions: [{
-                id: 'q_' + Date.now() + '_1',
-                text: 'Two circles having same \\_\\_\\_\\_\\_ are called concentric circles',
-                options: [
-                    { id: 'o1', text: 'Center', isCorrect: true },
-                    { id: 'o2', text: 'radius', isCorrect: false },
-                    { id: 'o3', text: 'arc', isCorrect: false },
-                    { id: 'o4', text: 'segment', isCorrect: false }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }, {
-                id: 'q_' + Date.now() + '_2',
-                text: 'Degree measure of a circle is \\_\\_\\_\\_\\_ degrees',
-                options: [
-                    { id: 'o5', text: '90', isCorrect: false },
-                    { id: 'o6', text: '180', isCorrect: false },
-                    { id: 'o7', text: '270', isCorrect: false },
-                    { id: 'o8', text: '360', isCorrect: true }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }, {
-                id: 'q_' + Date.now() + '_3',
-                text: 'If a line intersect a circle in two distinct points, then it is called',
-                options: [
-                    { id: 'o9', text: 'Secant', isCorrect: true },
-                    { id: 'o10', text: 'tangent', isCorrect: false },
-                    { id: 'o11', text: 'median', isCorrect: false },
-                    { id: 'o12', text: 'altitude', isCorrect: false }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }]
-        }, {
-            id: 'sec_' + Date.now() + '_2',
-            name: 'Physics',
-            questions: [{
-                id: 'q_' + Date.now() + '_4',
-                text: 'If the length of the wire is increased its resistivity \\_\\_\\_\\_\\_\\_\\_\\_\\_',
-                options: [
-                    { id: 'o13', text: 'Increase', isCorrect: false },
-                    { id: 'o14', text: 'decrease', isCorrect: false },
-                    { id: 'o15', text: 'remains same', isCorrect: true },
-                    { id: 'o16', text: 'may increase or decrease', isCorrect: false }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }]
-        }, {
-            id: 'sec_' + Date.now() + '_3',
-            name: 'Chemistry',
-            questions: [{
-                id: 'q_' + Date.now() + '_5',
-                text: 'If eight electrons present in valence shell, it is called',
-                options: [
-                    { id: 'o17', text: 'Duplet configuration', isCorrect: false },
-                    { id: 'o18', text: 'Octet configuration', isCorrect: true },
-                    { id: 'o19', text: 'Inert gas configuration', isCorrect: false },
-                    { id: 'o20', text: 'Pseudo inert gas configuration', isCorrect: false }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }]
-        }, {
-            id: 'sec_' + Date.now() + '_4',
-            name: 'MAT',
-            questions: [{
-                id: 'q_' + Date.now() + '_6',
-                text: 'Choose the term which will continue the following series: P3C, R5F, T8I, V12L, ?',
-                options: [
-                    { id: 'o21', text: 'Y17O', isCorrect: false },
-                    { id: 'o22', text: 'X17M', isCorrect: false },
-                    { id: 'o23', text: 'X17O', isCorrect: true },
-                    { id: 'o24', text: 'X16O', isCorrect: false }
-                ],
-                images: { q: null, opts: [null, null, null, null] }
-            }]
-        }]
+        id: uid('q'),
+        text,
+        layout: 'row',
+        correctIndex,
+        marks: 1,
+        options: options.map((value, index) => newOption(index, value)),
     };
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  RENDER
-// ═══════════════════════════════════════════════════════════════
+function newOption(index, text = '') {
+    return { id: uid(`opt${index}`), text };
+}
+
+function getActivePaper() {
+    return state.papers.find(p => p.id === state.activePaperId) || null;
+}
+
+function getActiveSection() {
+    const paper = getActivePaper();
+    return paper?.sections.find(s => s.id === state.activeSectionId) || null;
+}
 
 function render() {
+    normalize();
     renderPaperList();
-    renderEditor();
-    saveState();
+    renderPaperSetup();
+    renderSectionTabs();
+    renderWorkbench();
+    renderTeacherPanel();
+    save();
+    renderMathSoon();
 }
 
 function renderPaperList() {
-    const container = document.getElementById('paperList');
-    if (state.papers.length === 0) {
-        container.innerHTML =
-            `<div class="empty-papers">No papers yet.<br>Click "+ New" to create one.</div>`;
-        return;
-    }
-    let html = '';
-    state.papers.forEach(p => {
-        const active = p.id === state.activePaperId ? 'active' : '';
-        const qCount = p.sections.reduce((sum, s) => sum + s.questions.length, 0);
-        html += `
-            <div class="paper-item ${active}" onclick="selectPaper('${p.id}')">
-                <span class="paper-name">${escHtml(p.name)}</span>
-                <span class="paper-meta">${p.sections.length} sec · ${qCount} Q</span>
-                <button class="del-paper" onclick="event.stopPropagation(); deletePaper('${p.id}')" title="Delete">✕</button>
-            </div>
+    els.paperList.innerHTML = state.papers.map(paper => {
+        const count = countQuestions(paper);
+        return `
+            <button class="paper-row ${paper.id === state.activePaperId ? 'active' : ''}" data-action="select-paper" data-id="${paper.id}">
+                <strong>${esc(paper.title)}</strong>
+                <span>${esc(paper.meta.className || 'Class')} · ${count} questions</span>
+            </button>
         `;
+    }).join('');
+    els.paperList.querySelectorAll('[data-action="select-paper"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.activePaperId = btn.dataset.id;
+            state.activeSectionId = getActivePaper().sections[0]?.id || null;
+            render();
+        });
     });
-    container.innerHTML = html;
 }
 
-function renderEditor() {
-    const container = document.getElementById('mainEditor');
-    const paper = state.papers.find(p => p.id === state.activePaperId);
-    if (!paper) {
-        container.innerHTML = `
-            <div style="text-align:center;padding:80px 20px;color:#94a3b8;">
-                <div style="font-size:48px;margin-bottom:16px;">📄</div>
-                <h3 style="color:#1e293b;">No paper selected</h3>
-                <p style="font-size:14px;">Create a new paper or select one from the left panel.</p>
-                <button onclick="createNewPaper()" style="margin-top:16px;background:#2563eb;color:#fff;border:none;padding:8px 24px;border-radius:8px;cursor:pointer;">+ New Paper</button>
-            </div>
-        `;
-        return;
-    }
-
-    let html = `
-        <div class="editor-paper-title">
-            <input type="text" value="${escHtml(paper.name)}" 
-                   onchange="renamePaper('${paper.id}', this.value)" 
-                   placeholder="Paper title..." />
-            <div class="paper-actions">
-                <button onclick="addSection('${paper.id}')">+ Section</button>
-                <button onclick="openReuseModal('${paper.id}')">📥 Reuse Q</button>
-                <button onclick="exportDOCX('${paper.id}')">📄 DOCX</button>
-                <button onclick="exportPDF('${paper.id}')">📄 PDF</button>
-                <button onclick="exportJSON('${paper.id}')">📋 JSON</button>
-                <button onclick="exportCSV('${paper.id}')">📊 CSV</button>
+function renderPaperSetup() {
+    const paper = getActivePaper();
+    if (!paper) return;
+    els.paperSetup.innerHTML = `
+        <div class="setup-grid">
+            ${field('Title', 'title', paper.title, 'Paper title')}
+            ${field('Class', 'className', paper.meta.className, 'IX')}
+            ${field('Subject', 'subject', paper.meta.subject, 'MPCM')}
+            ${field('Test', 'testName', paper.meta.testName, 'Unit Test')}
+            ${field('Time', 'duration', paper.meta.duration, '1 hr')}
+            ${field('Marks', 'marks', paper.meta.marks, '60')}
+            <div class="field instructions-field">
+                <label>Instructions</label>
+                <textarea data-meta="instructions" placeholder="Instructions shown on the paper">${esc(paper.meta.instructions)}</textarea>
             </div>
         </div>
     `;
+    els.paperSetup.querySelectorAll('[data-meta]').forEach(input => {
+        input.addEventListener('input', () => updateMeta(input.dataset.meta, input.value));
+    });
+}
 
-    if (paper.sections.length === 0) {
-        html += `<div style="text-align:center;padding:40px 0;color:#94a3b8;">
-                    No sections yet. Click "+ Section" to add one.
-                </div>`;
-        container.innerHTML = html;
+function field(label, key, value, placeholder) {
+    return `
+        <div class="field">
+            <label>${label}</label>
+            <input data-meta="${key}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" />
+        </div>
+    `;
+}
+
+function renderSectionTabs() {
+    const paper = getActivePaper();
+    if (!paper) return;
+    els.sectionTabs.innerHTML = `
+        ${paper.sections.map(section => `
+            <button class="section-tab ${section.id === state.activeSectionId ? 'active' : ''}" data-section="${section.id}">
+                ${esc(section.name)} · ${section.questions.length}
+            </button>
+        `).join('')}
+        <button class="section-tab" id="addSectionBtn">+ Section</button>
+    `;
+    els.sectionTabs.querySelectorAll('[data-section]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.activeSectionId = btn.dataset.section;
+            render();
+        });
+    });
+    document.getElementById('addSectionBtn').addEventListener('click', addSection);
+}
+
+function renderWorkbench() {
+    const section = getActiveSection();
+    if (!section) {
+        els.workbench.innerHTML = `<div class="empty-state"><strong>No section selected</strong>Add a section to start writing questions.</div>`;
         return;
     }
 
-    paper.sections.forEach((sec, si) => {
-        const qCount = sec.questions.length;
-        html += `
-            <div class="section-block" data-sec-id="${sec.id}">
-                <div class="section-header">
-                    <div class="sec-name">
-                        <span>📂</span>
-                        <input type="text" value="${escHtml(sec.name)}" 
-                               onchange="renameSection('${paper.id}','${sec.id}',this.value)" 
-                               placeholder="Section name" />
-                        <span class="text-muted">(${qCount} Q)</span>
-                    </div>
-                    <div class="sec-actions">
-                        <button onclick="addQuestion('${paper.id}','${sec.id}')">+ Question</button>
-                        <button class="del-sec" onclick="deleteSection('${paper.id}','${sec.id}')">✕</button>
-                    </div>
+    els.workbench.innerHTML = `
+        <div class="workbench-head">
+            <div class="workbench-title">
+                <input id="sectionNameInput" value="${esc(section.name)}" />
+            </div>
+            <div class="question-tools">
+                <button class="small-btn success" id="addQuestionBtn">+ Question</button>
+                <button class="small-btn" id="duplicateSectionBtn">Duplicate</button>
+                <button class="small-btn danger" id="deleteSectionBtn">Delete</button>
+            </div>
+        </div>
+        ${section.questions.length ? section.questions.map((question, index) => questionCard(question, index)).join('') : emptyQuestions()}
+    `;
+
+    document.getElementById('sectionNameInput').addEventListener('input', e => {
+        section.name = e.target.value || 'Untitled Section';
+        renderSectionTabs();
+        renderTeacherPanel();
+        save();
+    });
+    document.getElementById('addQuestionBtn').addEventListener('click', () => addQuestion(section.id));
+    document.getElementById('duplicateSectionBtn').addEventListener('click', duplicateSection);
+    document.getElementById('deleteSectionBtn').addEventListener('click', deleteSection);
+
+    bindRichEditors();
+
+    els.workbench.querySelectorAll('[data-correct]').forEach(input => {
+        input.addEventListener('change', () => {
+            findQuestion(input.dataset.qid).correctIndex = Number(input.dataset.correct);
+            render();
+        });
+    });
+
+    els.workbench.querySelectorAll('[data-layout]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            findQuestion(btn.dataset.qid).layout = btn.dataset.layout;
+            render();
+        });
+    });
+
+    els.workbench.querySelectorAll('[data-question-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.questionAction;
+            const question = findQuestion(btn.dataset.qid);
+            if (action === 'duplicate') duplicateQuestion(question.id);
+            if (action === 'delete') deleteQuestion(question.id);
+            if (action === 'move-up') moveQuestion(question.id, -1);
+            if (action === 'move-down') moveQuestion(question.id, 1);
+        });
+    });
+
+    els.workbench.querySelectorAll('[data-remove-image]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const question = findQuestion(btn.dataset.qid);
+            const field = btn.dataset.field;
+            const index = Number(btn.dataset.index);
+            removeImageFromQuestionField(question, field, index);
+            render();
+        });
+    });
+}
+
+function questionCard(question, index) {
+    return `
+        <article class="question-card" data-card="${question.id}">
+            <div class="question-head">
+                <span class="q-number">${index + 1}</span>
+                <div>
+                    ${richEditor({
+                        id: `${question.id}-text`,
+                        qid: question.id,
+                        field: 'text',
+                        value: question.text,
+                        placeholder: 'Type question. Paste images here. Use math like \\(x^2\\).'
+                    })}
+                    <div class="paste-hint">Paste images directly at the cursor. Use simple markdown for bold, italics, and math.</div>
                 </div>
-                <div class="section-body">
-        `;
-
-        if (sec.questions.length === 0) {
-            html += `<div style="color:#94a3b8;padding:12px 0;text-align:center;font-size:13px;">No questions yet.</div>`;
-        } else {
-            sec.questions.forEach((q, qi) => {
-                const qNum = qi + 1;
-                const imgQ = q.images && q.images.q ? q.images.q : null;
-                html += `
-                    <div class="question-item" data-q-id="${q.id}">
-                        <div class="q-header">
-                            <span class="q-number">${qNum}.</span>
-                            <div style="flex:1;min-width:0;">
-                                <textarea class="q-text" rows="1" 
-                                          oninput="autoResize(this); updateQuestionText('${paper.id}','${sec.id}','${q.id}',this.value)"
-                                          placeholder="Enter question text... (use \\(...\\) for math)">${escHtml(q.text)}</textarea>
-                                ${imgQ ? `<div><img src="${imgQ}" class="img-preview" /><button class="img-remove" onclick="removeQuestionImage('${paper.id}','${sec.id}','${q.id}')">✕</button></div>` : ''}
-                                <div class="img-hint">📷 Paste image (Ctrl+V) into question</div>
-                            </div>
-                            <div class="q-actions">
-                                <button onclick="duplicateQuestion('${paper.id}','${sec.id}','${q.id}')" title="Duplicate">📋</button>
-                                <button class="del-q" onclick="deleteQuestion('${paper.id}','${sec.id}','${q.id}')" title="Delete">✕</button>
-                            </div>
-                        </div>
-                        <div class="options-container ${state.optionLayout}" data-layout="${state.optionLayout}">
-                `;
-                // ensure 4 options
-                while (q.options.length < 4) {
-                    q.options.push({ id: 'opt_' + Date.now() + '_' + q.options.length, text: '',
-                    isCorrect: false });
-                }
-                const labels = ['A', 'B', 'C', 'D'];
-                q.options.forEach((opt, oi) => {
-                    const imgOpt = q.images && q.images.opts && q.images.opts[oi] ? q.images
-                        .opts[oi] : null;
-                    html += `
-                        <div class="option-item">
-                            <span class="opt-label">${labels[oi]}.</span>
-                            <input type="text" class="opt-text" 
-                                   value="${escHtml(opt.text)}"
-                                   placeholder="Option ${labels[oi]}"
-                                   oninput="updateOptionText('${paper.id}','${sec.id}','${q.id}',${oi},this.value)" />
-                            ${imgOpt ? `<img src="${imgOpt}" class="img-preview" /><button class="img-remove" onclick="removeOptionImage('${paper.id}','${sec.id}','${q.id}',${oi})">✕</button>` : ''}
-                            <input type="radio" class="opt-correct" name="correct_${q.id}" 
-                                   ${opt.isCorrect ? 'checked' : ''}
-                                   onchange="setCorrectOption('${paper.id}','${sec.id}','${q.id}',${oi})" />
-                            <button class="opt-del" onclick="deleteOption('${paper.id}','${sec.id}','${q.id}',${oi})" title="Remove option">✕</button>
-                        </div>
-                    `;
-                });
-                html += `
-                        </div>
-                        <div class="layout-selector">
-                            <label><input type="radio" name="layout_${q.id}" value="row" ${state.optionLayout === 'row' ? 'checked' : ''} onchange="setLayout('row')" /> 1×4</label>
-                            <label><input type="radio" name="layout_${q.id}" value="grid2" ${state.optionLayout === 'grid2' ? 'checked' : ''} onchange="setLayout('grid2')" /> 2×2</label>
-                            <label><input type="radio" name="layout_${q.id}" value="column" ${state.optionLayout === 'column' ? 'checked' : ''} onchange="setLayout('column')" /> 4×1</label>
-                        </div>
-                    </div>
-                `;
-            });
-        }
-
-        html += `
-                    <button class="btn-add-question" onclick="addQuestion('${paper.id}','${sec.id}')">+ Add Question</button>
+                <div class="question-tools">
+                    <button class="small-btn" data-question-action="move-up" data-qid="${question.id}">↑</button>
+                    <button class="small-btn" data-question-action="move-down" data-qid="${question.id}">↓</button>
+                    <button class="small-btn" data-question-action="duplicate" data-qid="${question.id}">Copy</button>
+                    <button class="small-btn danger" data-question-action="delete" data-qid="${question.id}">Delete</button>
                 </div>
             </div>
-        `;
-    });
-
-    html += `<button class="btn-add-section" onclick="addSection('${paper.id}')">+ Add Section</button>`;
-    container.innerHTML = html;
-
-    // render math
-    if (window.renderMathInElement) {
-        try {
-            renderMathInElement(container, {
-                delimiters: [
-                    { left: '$$', right: '$$', display: true },
-                    { left: '\\[', right: '\\]', display: true },
-                    { left: '\\(', right: '\\)', display: false }
-                ],
-                throwOnError: false
-            });
-        } catch (e) {}
-    }
-
-    // auto-resize textareas
-    document.querySelectorAll('.q-text').forEach(ta => autoResize(ta));
-}
-
-// ─── Helpers ───
-function escHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function autoResize(el) {
-    el.style.height = 'auto';
-    el.style.height = (el.scrollHeight) + 'px';
-}
-
-// ─── Layout ───
-function setLayout(layout) {
-    state.optionLayout = layout;
-    localStorage.setItem(LAYOUT_KEY, layout);
-    render();
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  CRUD OPERATIONS
-// ═══════════════════════════════════════════════════════════════
-
-function createNewPaper() {
-    const paper = {
-        id: 'paper_' + Date.now(),
-        name: 'New Paper ' + (state.papers.length + 1),
-        sections: []
-    };
-    state.papers.push(paper);
-    state.activePaperId = paper.id;
-    // add a default section
-    addSection(paper.id);
-    render();
-    toast('📄 New paper created');
-}
-
-function deletePaper(paperId) {
-    if (!confirm('Delete this paper and all its questions?')) return;
-    state.papers = state.papers.filter(p => p.id !== paperId);
-    if (state.activePaperId === paperId) {
-        state.activePaperId = state.papers.length > 0 ? state.papers[0].id : null;
-        state.activeSectionId = null;
-    }
-    render();
-    toast('🗑️ Paper deleted');
-}
-
-function selectPaper(paperId) {
-    state.activePaperId = paperId;
-    const paper = state.papers.find(p => p.id === paperId);
-    if (paper && paper.sections.length > 0) {
-        state.activeSectionId = paper.sections[0].id;
-    }
-    render();
-}
-
-function renamePaper(paperId, newName) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (paper) {
-        paper.name = newName || 'Untitled';
-        saveState();
-        renderPaperList();
-    }
-}
-
-// ─── Sections ───
-function addSection(paperId) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = {
-        id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        name: 'Section ' + (paper.sections.length + 1),
-        questions: []
-    };
-    paper.sections.push(sec);
-    state.activeSectionId = sec.id;
-    render();
-    toast('📂 Section added');
-}
-
-function deleteSection(paperId, secId) {
-    if (!confirm('Delete this section and all its questions?')) return;
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    paper.sections = paper.sections.filter(s => s.id !== secId);
-    if (state.activeSectionId === secId) {
-        state.activeSectionId = paper.sections.length > 0 ? paper.sections[0].id : null;
-    }
-    render();
-    toast('🗑️ Section deleted');
-}
-
-function renameSection(paperId, secId, newName) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (sec) {
-        sec.name = newName || 'Untitled';
-        saveState();
-        render();
-    }
-}
-
-// ─── Questions ───
-function addQuestion(paperId, secId) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = {
-        id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        text: '',
-        options: [
-            { id: 'opt_' + Date.now() + '_0', text: '', isCorrect: false },
-            { id: 'opt_' + Date.now() + '_1', text: '', isCorrect: false },
-            { id: 'opt_' + Date.now() + '_2', text: '', isCorrect: false },
-            { id: 'opt_' + Date.now() + '_3', text: '', isCorrect: false }
-        ],
-        images: { q: null, opts: [null, null, null, null] }
-    };
-    sec.questions.push(q);
-    render();
-    // focus the new question's textarea
-    setTimeout(() => {
-        const ta = document.querySelector(`.question-item[data-q-id="${q.id}"] .q-text`);
-        if (ta) ta.focus();
-    }, 50);
-    toast('✏️ Question added');
-}
-
-function deleteQuestion(paperId, secId, qId) {
-    if (!confirm('Delete this question?')) return;
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    sec.questions = sec.questions.filter(q => q.id !== qId);
-    render();
-    toast('🗑️ Question deleted');
-}
-
-function duplicateQuestion(paperId, secId, qId) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const orig = sec.questions.find(q => q.id === qId);
-    if (!orig) return;
-    const copy = JSON.parse(JSON.stringify(orig));
-    copy.id = 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-    copy.options.forEach(o => { o.id = 'opt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); });
-    if (copy.images) {
-        copy.images = { q: copy.images.q || null, opts: copy.images.opts ? [...copy.images.opts] : [null, null,
-                null, null
-            ] };
-    }
-    sec.questions.splice(sec.questions.indexOf(orig) + 1, 0, copy);
-    render();
-    toast('📋 Question duplicated');
-}
-
-function updateQuestionText(paperId, secId, qId, text) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (q) {
-        q.text = text;
-        saveState();
-    }
-}
-
-// ─── Options ───
-function updateOptionText(paperId, secId, qId, idx, text) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (q && q.options[idx]) {
-        q.options[idx].text = text;
-        saveState();
-    }
-}
-
-function setCorrectOption(paperId, secId, qId, idx) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (q) {
-        q.options.forEach((o, i) => o.isCorrect = (i === idx));
-        saveState();
-        render();
-    }
-}
-
-function deleteOption(paperId, secId, qId, idx) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (!q || q.options.length <= 1) return;
-    q.options.splice(idx, 1);
-    if (q.images && q.images.opts) {
-        q.images.opts.splice(idx, 1);
-    }
-    // ensure we have 4 options
-    while (q.options.length < 4) {
-        q.options.push({ id: 'opt_' + Date.now() + '_' + q.options.length, text: '', isCorrect: false });
-        if (q.images && q.images.opts) q.images.opts.push(null);
-    }
-    render();
-    toast('🗑️ Option removed');
-}
-
-// ─── Images ───
-function handleImagePaste(e, paperId, secId, qId, optIdx = null) {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    let imageItem = null;
-    for (let item of items) {
-        if (item.type.startsWith('image/')) {
-            imageItem = item;
-            break;
-        }
-    }
-    if (!imageItem) return;
-    e.preventDefault();
-    const file = imageItem.getAsFile();
-    const reader = new FileReader();
-    reader.onload = function(ev) {
-        const dataUrl = ev.target.result;
-        const paper = state.papers.find(p => p.id === paperId);
-        if (!paper) return;
-        const sec = paper.sections.find(s => s.id === secId);
-        if (!sec) return;
-        const q = sec.questions.find(q => q.id === qId);
-        if (!q) return;
-        if (!q.images) q.images = { q: null, opts: [null, null, null, null] };
-        if (optIdx === null) {
-            q.images.q = dataUrl;
-        } else if (optIdx >= 0 && optIdx < 4) {
-            if (!q.images.opts) q.images.opts = [null, null, null, null];
-            q.images.opts[optIdx] = dataUrl;
-        }
-        saveState();
-        render();
-        toast('🖼️ Image pasted');
-    };
-    reader.readAsDataURL(file);
-}
-
-function removeQuestionImage(paperId, secId, qId) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (q && q.images) {
-        q.images.q = null;
-        saveState();
-        render();
-        toast('🖼️ Image removed');
-    }
-}
-
-function removeOptionImage(paperId, secId, qId, idx) {
-    const paper = state.papers.find(p => p.id === paperId);
-    if (!paper) return;
-    const sec = paper.sections.find(s => s.id === secId);
-    if (!sec) return;
-    const q = sec.questions.find(q => q.id === qId);
-    if (q && q.images && q.images.opts) {
-        q.images.opts[idx] = null;
-        saveState();
-        render();
-        toast('🖼️ Image removed');
-    }
-}
-
-// ─── Paste event binding ───
-document.addEventListener('DOMContentLoaded', function() {
-    document.addEventListener('paste', function(e) {
-        const target = e.target;
-        if (!target.closest) return;
-        const qText = target.closest('.q-text');
-        if (qText) {
-            const qItem = qText.closest('.question-item');
-            if (qItem) {
-                const qId = qItem.dataset.qId;
-                // find paper and sec
-                for (let p of state.papers) {
-                    for (let s of p.sections) {
-                        const q = s.questions.find(q => q.id === qId);
-                        if (q) {
-                            handleImagePaste(e, p.id, s.id, qId, null);
-                            return;
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        const optText = target.closest('.opt-text');
-        if (optText) {
-            const optItem = optText.closest('.option-item');
-            if (optItem) {
-                const qItem = optItem.closest('.question-item');
-                if (qItem) {
-                    const qId = qItem.dataset.qId;
-                    const optIdx = Array.from(optItem.parentElement.children).indexOf(optItem);
-                    for (let p of state.papers) {
-                        for (let s of p.sections) {
-                            const q = s.questions.find(q => q.id === qId);
-                            if (q) {
-                                handleImagePaste(e, p.id, s.id, qId, optIdx);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-});
-
-// ═══════════════════════════════════════════════════════════════
-//  REUSE QUESTIONS (Modal)
-// ═══════════════════════════════════════════════════════════════
-
-let reuseTargetPaperId = null;
-
-function openReuseModal(paperId) {
-    reuseTargetPaperId = paperId;
-    state.reuseSelected = [];
-    const modal = document.getElementById('reuseModal');
-    modal.classList.remove('hidden');
-    renderReuseModal();
-}
-
-function closeReuseModal() {
-    document.getElementById('reuseModal').classList.add('hidden');
-    state.reuseSelected = [];
-}
-
-function renderReuseModal() {
-    const body = document.getElementById('reuseModalBody');
-    let html = '';
-    const allQuestions = [];
-    state.papers.forEach(p => {
-        p.sections.forEach(s => {
-            s.questions.forEach(q => {
-                allQuestions.push({
-                    paperName: p.name,
-                    sectionName: s.name,
-                    question: q,
-                    paperId: p.id,
-                    sectionId: s.id
-                });
-            });
-        });
-    });
-    if (allQuestions.length === 0) {
-        html = `<div style="color:#94a3b8;padding:30px 0;text-align:center;">No questions available to reuse.</div>`;
-    } else {
-        allQuestions.forEach((item, idx) => {
-            const checked = state.reuseSelected.includes(idx) ? 'checked' : '';
-            const qText = item.question.text || '(empty question)';
-            html += `
-                <div class="reuse-item" onclick="toggleReuseItem(${idx})">
-                    <span class="ri-text">${escHtml(qText.substring(0, 80))}${qText.length > 80 ? '…' : ''}</span>
-                    <span class="ri-meta">${escHtml(item.paperName)} › ${escHtml(item.sectionName)}</span>
-                    <input type="checkbox" ${checked} onclick="event.stopPropagation(); toggleReuseItem(${idx})" />
+            <div class="options-grid ${question.layout}">
+                ${question.options.map((option, optionIndex) => optionCard(question, option, optionIndex)).join('')}
+            </div>
+            <div class="layout-row">
+                <div class="segmented">
+                    ${LAYOUTS.map(layout => `
+                        <button class="${question.layout === layout.id ? 'active' : ''}" data-layout="${layout.id}" data-qid="${question.id}">${layout.label}</button>
+                    `).join('')}
                 </div>
-            `;
-        });
-    }
-    body.innerHTML = html;
-    // store items for apply
-    body.dataset.items = JSON.stringify(allQuestions);
-}
-
-function toggleReuseItem(idx) {
-    const pos = state.reuseSelected.indexOf(idx);
-    if (pos === -1) state.reuseSelected.push(idx);
-    else state.reuseSelected.splice(pos, 1);
-    renderReuseModal();
-}
-
-function applyReuseQuestions() {
-    const body = document.getElementById('reuseModalBody');
-    const items = JSON.parse(body.dataset.items || '[]');
-    const selected = state.reuseSelected;
-    if (selected.length === 0) {
-        toast('⚠️ No questions selected');
-        return;
-    }
-    const paper = state.papers.find(p => p.id === reuseTargetPaperId);
-    if (!paper) {
-        toast('⚠️ Paper not found');
-        return;
-    }
-    // add to first section, or create one
-    let targetSec = paper.sections.length > 0 ? paper.sections[0] : null;
-    if (!targetSec) {
-        targetSec = { id: 'sec_' + Date.now(), name: 'Section 1', questions: [] };
-        paper.sections.push(targetSec);
-    }
-    selected.forEach(idx => {
-        const item = items[idx];
-        if (!item) return;
-        const qCopy = JSON.parse(JSON.stringify(item.question));
-        qCopy.id = 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-        qCopy.options.forEach(o => { o.id = 'opt_' + Date.now() + '_' + Math.random().toString(36).slice(2,
-            6); });
-        if (qCopy.images) {
-            qCopy.images = { q: qCopy.images.q || null, opts: qCopy.images.opts ? [...qCopy.images
-                    .opts] : [null, null, null, null] };
-        }
-        targetSec.questions.push(qCopy);
-    });
-    closeReuseModal();
-    render();
-    toast('📥 ' + selected.length + ' question(s) reused');
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  EXPORT FUNCTIONS
-// ═══════════════════════════════════════════════════════════════
-
-function getPaper(paperId) {
-    return state.papers.find(p => p.id === paperId);
-}
-
-function buildExportHTML(paper, layout) {
-    const labels = ['A', 'B', 'C', 'D'];
-    let html = `
-        <html><head><meta charset="UTF-8">
-        <style>
-            body { font-family: 'Times New Roman', serif; padding: 30px; max-width: 900px; margin: auto; }
-            .paper-title { font-size: 22px; font-weight: 700; text-align: center; margin-bottom: 8px; }
-            .paper-meta { text-align: center; color: #555; margin-bottom: 24px; font-size: 14px; }
-            .section-title { font-size: 18px; font-weight: 600; margin: 24px 0 12px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
-            .q-item { margin-bottom: 16px; page-break-inside: avoid; }
-            .q-text { font-weight: 500; margin-bottom: 4px; }
-            .opts { display: grid; grid-template-columns: ${layout === 'row' ? '1fr 1fr 1fr 1fr' : layout === 'grid2' ? '1fr 1fr' : '1fr'}; gap: 4px 16px; padding-left: 24px; }
-            .opt { display: flex; align-items: baseline; gap: 4px; }
-            .opt-label { font-weight: 500; min-width: 20px; }
-            .opt-correct { color: #16a34a; font-weight: 600; }
-            .opt-text { }
-            .q-img { max-width: 200px; max-height: 120px; margin: 4px 0; border: 1px solid #ddd; border-radius: 4px; }
-            .opt-img { max-width: 80px; max-height: 60px; margin: 2px 0; border: 1px solid #ddd; border-radius: 3px; }
-            .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #888; border-top: 1px solid #ddd; padding-top: 12px; }
-    </style>
-</head><body>
-    <div class="paper-title">${escHtml(paper.name)}</div>
-    <div class="paper-meta">Total Questions: ${paper.sections.reduce((s,sec) => s + sec.questions.length, 0)}  •  Sections: ${paper.sections.length}</div>
+                <span class="paste-hint">Answer: ${LABELS[question.correctIndex] || 'A'}</span>
+            </div>
+        </article>
     `;
-    paper.sections.forEach(sec => {
-if (sec.questions.length === 0) return;
-html += `<div class="section-title">${escHtml(sec.name)}</div>`;
-sec.questions.forEach((q, qi) => {
-    const qText = q.text || '(empty question)';
-    html += `<div class="q-item"><div class="q-text">${qi+1}. ${escHtml(qText)}</div>`;
-    if (q.images && q.images.q) {
-        html += `<div><img src="${q.images.q}" class="q-img" /></div>`;
+}
+
+function optionCard(question, option, optionIndex) {
+    return `
+        <div class="option-card ${question.correctIndex === optionIndex ? 'correct' : ''}">
+            <span class="option-label">${LABELS[optionIndex]}.</span>
+            <div>
+                ${richEditor({
+                    id: `${question.id}-option-${optionIndex}`,
+                    qid: question.id,
+                    option: optionIndex,
+                    field: `options.${optionIndex}.text`,
+                    value: option.text,
+                    placeholder: `Option ${LABELS[optionIndex]}`
+                })}
+            </div>
+            <input class="correct-radio" type="radio" name="correct-${question.id}" ${question.correctIndex === optionIndex ? 'checked' : ''} data-correct="${optionIndex}" data-qid="${question.id}" title="Correct answer" />
+            <span></span>
+        </div>
+    `;
+}
+
+function richEditor({ id, qid, option = '', field, value, placeholder }) {
+    const imageMap = extractImages(value).map(img => img.src);
+    const mapAttr = esc(JSON.stringify(imageMap));
+    const codeValue = codeFromMarkdown(value);
+    return `
+        <div class="rich-editor" data-rich-editor data-editor-id="${esc(id)}" data-qid="${esc(qid)}" data-option="${esc(option)}" data-field="${esc(field)}">
+            <div class="editor-toolbar">
+                <button type="button" class="tool-btn" data-format="bold" data-editor-id="${esc(id)}" title="Bold"><b>B</b></button>
+                <button type="button" class="tool-btn" data-format="italic" data-editor-id="${esc(id)}" title="Italic"><i>I</i></button>
+                <button type="button" class="tool-btn" data-toggle-code data-editor-id="${esc(id)}" title="Show code">Code</button>
+            </div>
+            <div class="editor visual-editor"
+                 contenteditable="true"
+                 data-visual-editor
+                 data-editor-id="${esc(id)}"
+                 data-placeholder="${esc(placeholder)}">${markdownToVisualHtml(value)}</div>
+            <textarea class="editor code-editor"
+                      data-code-editor
+                      data-editor-id="${esc(id)}"
+                      data-image-map="${mapAttr}"
+                      placeholder="Markdown code">${esc(codeValue)}</textarea>
+        </div>
+    `;
+}
+
+function bindRichEditors() {
+    els.workbench.querySelectorAll('[data-visual-editor]').forEach(editor => {
+        editor.addEventListener('input', () => {
+            updateFieldFromEditor(editor.dataset.editorId, markdownFromVisual(editor));
+        });
+        editor.addEventListener('blur', () => {
+            updateFieldFromEditor(editor.dataset.editorId, markdownFromVisual(editor));
+            render();
+        });
+    });
+
+    els.workbench.querySelectorAll('[data-code-editor]').forEach(editor => {
+        editor.addEventListener('input', () => {
+            autoResize(editor);
+            updateFieldFromEditor(editor.dataset.editorId, markdownFromCode(editor.value, editor.dataset.imageMap));
+        });
+        autoResize(editor);
+    });
+
+    els.workbench.querySelectorAll('[data-format]').forEach(btn => {
+        btn.addEventListener('click', () => applyFormat(btn.dataset.editorId, btn.dataset.format));
+    });
+
+    els.workbench.querySelectorAll('[data-toggle-code]').forEach(btn => {
+        btn.addEventListener('click', () => toggleCodeMode(btn.dataset.editorId));
+    });
+}
+
+function updateFieldFromEditor(editorId, markdown) {
+    const wrapper = document.querySelector(`[data-rich-editor][data-editor-id="${cssEscape(editorId)}"]`);
+    if (!wrapper) return;
+    const question = findQuestion(wrapper.dataset.qid);
+    if (!question) return;
+    setQuestionField(question, wrapper.dataset.field, markdown);
+    renderTeacherPanel();
+    save();
+}
+
+function setQuestionField(question, field, value) {
+    if (field === 'text') {
+        question.text = value;
+        return;
     }
-    html += `<div class="opts">`;
-    q.options.forEach((o, oi) => {
-        const isCorrect = o.isCorrect ? '★ ' : '';
-        const imgOpt = q.images && q.images.opts && q.images.opts[oi] ? q.images.opts[oi] : null;
-        html += `<div class="opt">
-                    <span class="opt-label">${labels[oi]}.</span>
-                    <span class="opt-text ${o.isCorrect ? 'opt-correct' : ''}">${isCorrect}${escHtml(o.text || '')}</span>
-                    ${imgOpt ? `<img src="${imgOpt}" class="opt-img" />` : ''}
-                </div>`;
-    });
-    html += `</div></div>`;
-});
-    });
-    html += `<div class="footer">Generated by MCQ Builder • ${new Date().toLocaleString()}</div>`;
-    html += `</body></html>`;
+    const optionMatch = field.match(/^options\.(\d+)\.text$/);
+    if (optionMatch) {
+        const option = question.options[Number(optionMatch[1])];
+        if (option) option.text = value;
+    }
+}
+
+function getQuestionField(question, field) {
+    if (field === 'text') return question.text;
+    const optionMatch = field.match(/^options\.(\d+)\.text$/);
+    if (optionMatch) return question.options[Number(optionMatch[1])]?.text || '';
+    return '';
+}
+
+function toggleCodeMode(editorId) {
+    const wrapper = document.querySelector(`[data-rich-editor][data-editor-id="${cssEscape(editorId)}"]`);
+    if (!wrapper) return;
+    const codeEditor = wrapper.querySelector('[data-code-editor]');
+    const visualEditor = wrapper.querySelector('[data-visual-editor]');
+    const showingCode = wrapper.classList.toggle('show-code');
+    const question = findQuestion(wrapper.dataset.qid);
+    const markdown = question ? getQuestionField(question, wrapper.dataset.field) : '';
+    if (showingCode) {
+        codeEditor.dataset.imageMap = JSON.stringify(extractImages(markdown).map(img => img.src));
+        codeEditor.value = codeFromMarkdown(markdown);
+        autoResize(codeEditor);
+        codeEditor.focus();
+    } else {
+        const restored = markdownFromCode(codeEditor.value, codeEditor.dataset.imageMap);
+        updateFieldFromEditor(editorId, restored);
+        visualEditor.innerHTML = markdownToVisualHtml(restored);
+        visualEditor.focus();
+    }
+}
+
+function applyFormat(editorId, format) {
+    const wrapper = document.querySelector(`[data-rich-editor][data-editor-id="${cssEscape(editorId)}"]`);
+    if (!wrapper) return;
+    if (wrapper.classList.contains('show-code')) {
+        wrapCodeSelection(wrapper.querySelector('[data-code-editor]'), format);
+        return;
+    }
+    const visual = wrapper.querySelector('[data-visual-editor]');
+    visual.focus();
+    document.execCommand(format === 'bold' ? 'bold' : 'italic', false, null);
+    updateFieldFromEditor(editorId, markdownFromVisual(visual));
+}
+
+function wrapCodeSelection(textarea, format) {
+    const marker = format === 'bold' ? '**' : '*';
+    const start = textarea.selectionStart || 0;
+    const end = textarea.selectionEnd || start;
+    const selected = textarea.value.slice(start, end) || 'text';
+    textarea.value = textarea.value.slice(0, start) + marker + selected + marker + textarea.value.slice(end);
+    textarea.setSelectionRange(start + marker.length, start + marker.length + selected.length);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+}
+
+function emptyQuestions() {
+    return `<div class="empty-state"><strong>No questions yet</strong><button class="btn primary" onclick="addQuestion('${state.activeSectionId}')">Add first question</button></div>`;
+}
+
+function imageStrip(markdown, qid, field) {
+    const images = extractImages(markdown);
+    if (!images.length) return '';
+    return `
+        <div class="image-strip">
+            ${images.map((img, index) => `
+                <span class="image-chip">
+                    <img src="${img.src}" alt="${esc(img.alt)}" />
+                    <button data-remove-image data-qid="${qid}" data-field="${field}" data-index="${index}" title="Remove image">x</button>
+                </span>
+            `).join('')}
+        </div>
+    `;
+}
+
+function markdownToVisualHtml(markdown) {
+    const source = String(markdown || '');
+    if (!source.trim()) return '';
+    let html = '';
+    const tokenRe = /!\[([^\]]*)\]\((data:image\/[^)]+)\)|\\\(([\s\S]+?)\\\)|\*\*([^*]+)\*\*|\*([^*]+)\*|\n/g;
+    let last = 0;
+    let match;
+    while ((match = tokenRe.exec(source))) {
+        html += esc(source.slice(last, match.index));
+        if (match[2]) {
+            html += `<img class="editor-image" src="${match[2]}" alt="${esc(match[1] || 'image')}" data-src="${match[2]}" data-alt="${esc(match[1] || 'image')}" contenteditable="false">`;
+        } else if (match[3]) {
+            html += mathHtml(match[3]);
+        } else if (match[4]) {
+            html += `<strong>${esc(match[4])}</strong>`;
+        } else if (match[5]) {
+            html += `<em>${esc(match[5])}</em>`;
+        } else {
+            html += '<br>';
+        }
+        last = tokenRe.lastIndex;
+    }
+    html += esc(source.slice(last));
     return html;
 }
 
-function exportDOCX(paperId) {
-    const paper = getPaper(paperId);
-    if (!paper) { toast('⚠️ Paper not found'); return; }
-    const html = buildExportHTML(paper, state.optionLayout);
-    const blob = new Blob([html], { type: 'application/msword' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${paper.name.replace(/\s+/g,'_')}.doc`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-    toast('📄 DOCX exported');
+function mathHtml(latex) {
+    const safeLatex = esc(latex);
+    let rendered = safeLatex;
+    if (window.katex) {
+        try {
+            rendered = katex.renderToString(latex, { throwOnError: false });
+        } catch (err) {
+            rendered = safeLatex;
+        }
+    }
+    return `<span class="math-token" data-latex="${safeLatex}" contenteditable="false">${rendered}</span>`;
 }
 
-function exportPDF(paperId) {
-    const paper = getPaper(paperId);
-    if (!paper) { toast('⚠️ Paper not found'); return; }
-    // Use html2canvas + jsPDF
-    const html = buildExportHTML(paper, state.optionLayout);
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = html;
-    wrapper.style.position = 'fixed';
-    wrapper.style.left = '-9999px';
-    wrapper.style.top = '0';
-    wrapper.style.width = '900px';
-    wrapper.style.background = '#fff';
-    wrapper.style.padding = '30px';
-    wrapper.style.zIndex = '-1';
-    document.body.appendChild(wrapper);
-    html2canvas(wrapper, { scale: 2, useCORS: true, allowTaint: true }).then(canvas => {
-const imgData = canvas.toDataURL('image/png');
-const { jsPDF } = window.jspdf;
-const pdf = new jsPDF('p', 'mm', 'a4');
-const pdfWidth = pdf.internal.pageSize.getWidth();
-const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-let heightLeft = pdfHeight;
-let position = 0;
-pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-heightLeft -= pdf.internal.pageSize.getHeight();
-while (heightLeft > 0) {
-    position = heightLeft - pdfHeight;
-    pdf.addPage();
-    pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-    heightLeft -= pdf.internal.pageSize.getHeight();
+function markdownFromVisual(root) {
+    return Array.from(root.childNodes).map(nodeToMarkdown).join('').replace(/\u00a0/g, ' ').trim();
 }
-pdf.save(`${paper.name.replace(/\s+/g,'_')}.pdf`);
-document.body.removeChild(wrapper);
-toast('📄 PDF exported');
-    }).catch(() => {
-document.body.removeChild(wrapper);
-toast('⚠️ PDF export failed. Try using "Print to PDF" from browser.');
+
+function nodeToMarkdown(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node;
+    if (el.matches('br')) return '\n';
+    if (el.matches('img.editor-image')) {
+        return `![${el.dataset.alt || 'image'}](${el.dataset.src || el.src})`;
+    }
+    if (el.matches('.math-token')) {
+        return `\\(${el.dataset.latex || el.textContent || ''}\\)`;
+    }
+    const content = Array.from(el.childNodes).map(nodeToMarkdown).join('');
+    if (el.matches('strong,b')) return `**${content}**`;
+    if (el.matches('em,i')) return `*${content}*`;
+    if (el.matches('div,p')) return `${content}\n`;
+    return content;
+}
+
+function codeFromMarkdown(markdown) {
+    let index = 0;
+    return String(markdown || '').replace(/!\[([^\]]*)\]\((data:image\/[^)]+)\)/g, (_, alt) => {
+        index += 1;
+        return `![${alt || `image ${index}`}](image:${index})`;
     });
 }
 
-function exportJSON(paperId) {
-    const paper = getPaper(paperId);
-    if (!paper) { toast('⚠️ Paper not found'); return; }
-    const data = JSON.stringify(paper, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${paper.name.replace(/\s+/g,'_')}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-    toast('📋 JSON exported');
-}
-
-function exportAllJSON() {
-    const data = JSON.stringify(state.papers, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `all_papers_${Date.now()}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-    toast('📋 All papers exported as JSON');
-}
-
-function exportCSV(paperId) {
-    const paper = getPaper(paperId);
-    if (!paper) { toast('⚠️ Paper not found'); return; }
-    const labels = ['A','B','C','D'];
-    let rows = [['Section','Question','Option','Correct','Answer']];
-    paper.sections.forEach(sec => {
-sec.questions.forEach(q => {
-    const qText = q.text.replace(/,/g,';').replace(/\n/g,' ');
-    q.options.forEach((o, oi) => {
-        const optText = o.text.replace(/,/g,';').replace(/\n/g,' ');
-        rows.push([
-            sec.name.replace(/,/g,';'),
-            qText,
-            labels[oi] + '. ' + optText,
-            o.isCorrect ? 'Yes' : 'No',
-            o.isCorrect ? labels[oi] : ''
-        ]);
-    });
-});
-    });
-    let csv = rows.map(r => r.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${paper.name.replace(/\s+/g,'_')}.csv`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-    toast('📊 CSV exported');
-}
-
-function importJSON() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = function(e) {
-const file = e.target.files[0];
-if (!file) return;
-const reader = new FileReader();
-reader.onload = function(ev) {
+function markdownFromCode(code, imageMapJson) {
+    let imageMap = [];
     try {
-        const data = JSON.parse(ev.target.result);
-        if (Array.isArray(data)) {
-            state.papers = data;
-        } else if (data.id && data.sections) {
-            state.papers.push(data);
-        } else {
-            toast('⚠️ Invalid JSON format');
-            return;
-        }
-        if (state.papers.length > 0) {
-            state.activePaperId = state.papers[0].id;
-        }
-        saveState();
-        render();
-        toast('📂 Imported successfully');
-    } catch(err) {
-        toast('⚠️ Error parsing JSON: ' + err.message);
+        imageMap = JSON.parse(imageMapJson || '[]');
+    } catch (err) {
+        imageMap = [];
     }
-};
-reader.readAsText(file);
-    };
-    input.click();
-}
-
-function clearAllData() {
-    if (!confirm('⚠️ Delete ALL papers and questions? This cannot be undone!')) return;
-    state.papers = [];
-    state.activePaperId = null;
-    state.activeSectionId = null;
-    saveState();
-    render();
-    toast('🗑️ All data cleared');
-}
-
-// ─── Toast ───
-function toast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    clearTimeout(el._timeout);
-    el._timeout = setTimeout(() => el.classList.remove('show'), 2500);
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  INIT
-// ═══════════════════════════════════════════════════════════════
-
-loadState();
-render();
-
-// re-render math on any change
-const origRender = render;
-render = function() {
-    origRender();
-    if (window.renderMathInElement) {
-try {
-    renderMathInElement(document.getElementById('mainEditor'), {
-        delimiters: [
-            { left: '$$', right: '$$', display: true },
-            { left: '\\[', right: '\\]', display: true },
-            { left: '\\(', right: '\\)', display: false }
-        ],
-        throwOnError: false
+    return String(code || '').replace(/!\[([^\]]*)\]\(image:(\d+)\)/g, (full, alt, ref) => {
+        const src = imageMap[Number(ref) - 1];
+        return src ? `![${alt || 'image'}](${src})` : full;
     });
-} catch(e) {}
-    }
-};
-render();
+}
 
-console.log('📝 MCQ Builder loaded!');
+function renderTeacherPanel() {
+    const paper = getActivePaper();
+    if (!paper) return;
+    const questions = allQuestions(paper);
+    const unanswered = questions.filter(q => !q.options.some(o => o.text.trim())).length;
+    els.teacherPanel.innerHTML = `
+        <div class="teacher-card">
+            <h3>Paper Check</h3>
+            <div class="stat-grid">
+                <div class="stat"><b>${questions.length}</b><span>Questions</span></div>
+                <div class="stat"><b>${paper.sections.length}</b><span>Sections</span></div>
+                <div class="stat"><b>${totalMarks(paper)}</b><span>Marks</span></div>
+                <div class="stat"><b>${unanswered}</b><span>Need options</span></div>
+            </div>
+        </div>
+        <div class="teacher-card">
+            <h3>Answer Key</h3>
+            <div class="answer-key">
+                ${questions.length ? questions.map((q, i) => `
+                    <div class="answer-key-row"><span>${i + 1}</span><b>${LABELS[q.correctIndex] || 'A'}</b></div>
+                `).join('') : '<span class="paste-hint">No questions yet.</span>'}
+            </div>
+        </div>
+        <div class="teacher-card">
+            <h3>Quick Flow</h3>
+            <div class="answer-key">
+                <span>1. Fill paper details.</span>
+                <span>2. Add sections and questions.</span>
+                <span>3. Select the correct answer.</span>
+                <span>4. Choose option layout per question.</span>
+                <span>5. Export Word or print.</span>
+            </div>
+        </div>
+    `;
+}
+
+function updateMeta(key, value) {
+    const paper = getActivePaper();
+    if (!paper) return;
+    if (key === 'title') paper.title = value || 'Untitled Paper';
+    else paper.meta[key] = value;
+    renderPaperList();
+    renderTeacherPanel();
+    save();
+}
+
+function createPaper() {
+    const paper = {
+        id: uid('paper'),
+        title: `Question Paper ${state.papers.length + 1}`,
+        meta: {
+            className: '',
+            subject: '',
+            testName: '',
+            duration: '',
+            marks: '',
+            instructions: '',
+        },
+        sections: [{ id: uid('section'), name: 'Section 1', questions: [] }],
+    };
+    state.papers.push(paper);
+    state.activePaperId = paper.id;
+    state.activeSectionId = paper.sections[0].id;
+    render();
+    toast('New paper created');
+}
+
+function addSection() {
+    const paper = getActivePaper();
+    const section = { id: uid('section'), name: `Section ${paper.sections.length + 1}`, questions: [] };
+    paper.sections.push(section);
+    state.activeSectionId = section.id;
+    render();
+}
+
+function duplicateSection() {
+    const paper = getActivePaper();
+    const section = getActiveSection();
+    const copy = deepCopy(section);
+    copy.id = uid('section');
+    copy.name = `${section.name} Copy`;
+    copy.questions.forEach(q => {
+        q.id = uid('q');
+        q.options.forEach((o, i) => o.id = uid(`opt${i}`));
+    });
+    paper.sections.push(copy);
+    state.activeSectionId = copy.id;
+    render();
+}
+
+function deleteSection() {
+    const paper = getActivePaper();
+    if (paper.sections.length === 1) {
+        toast('Keep at least one section');
+        return;
+    }
+    if (!confirm('Delete this section and all questions?')) return;
+    paper.sections = paper.sections.filter(s => s.id !== state.activeSectionId);
+    state.activeSectionId = paper.sections[0].id;
+    render();
+}
+
+function addQuestion(sectionId) {
+    const section = getActivePaper().sections.find(s => s.id === sectionId);
+    section.questions.push(newQuestion('', ['', '', '', ''], 0));
+    render();
+    setTimeout(() => {
+        const cards = document.querySelectorAll('.question-card');
+        const last = cards[cards.length - 1];
+        last?.querySelector('[data-visual-editor]')?.focus();
+    }, 40);
+}
+
+function duplicateQuestion(qid) {
+    const section = getActiveSection();
+    const index = section.questions.findIndex(q => q.id === qid);
+    const copy = deepCopy(section.questions[index]);
+    copy.id = uid('q');
+    copy.options.forEach((o, i) => o.id = uid(`opt${i}`));
+    section.questions.splice(index + 1, 0, copy);
+    render();
+}
+
+function deleteQuestion(qid) {
+    if (!confirm('Delete this question?')) return;
+    const section = getActiveSection();
+    section.questions = section.questions.filter(q => q.id !== qid);
+    render();
+}
+
+function moveQuestion(qid, delta) {
+    const section = getActiveSection();
+    const index = section.questions.findIndex(q => q.id === qid);
+    const next = index + delta;
+    if (next < 0 || next >= section.questions.length) return;
+    const [question] = section.questions.splice(index, 1);
+    section.questions.splice(next, 0, question);
+    render();
+}
+
+function findQuestion(qid) {
+    for (const section of getActivePaper().sections) {
+        const question = section.questions.find(q => q.id === qid);
+        if (question) return question;
+    }
+    return null;
+}
+
+function handlePaste(event) {
+    const target = event.target;
+    const codeEditor = target instanceof HTMLTextAreaElement ? target.closest('[data-code-editor]') : null;
+    const visualEditor = target instanceof HTMLElement ? target.closest('[data-visual-editor]') : null;
+    if (!codeEditor && !visualEditor) return;
+    const item = [...(event.clipboardData?.items || [])].find(entry => entry.type.startsWith('image/'));
+    if (!item) return;
+    event.preventDefault();
+    const reader = new FileReader();
+    reader.onload = () => {
+        if (codeEditor) {
+            const imageMap = JSON.parse(codeEditor.dataset.imageMap || '[]');
+            imageMap.push(reader.result);
+            codeEditor.dataset.imageMap = JSON.stringify(imageMap);
+            insertAtCursor(codeEditor, `![pasted image](image:${imageMap.length})`);
+            codeEditor.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+            insertImageIntoVisualEditor(visualEditor, reader.result);
+            updateFieldFromEditor(visualEditor.dataset.editorId, markdownFromVisual(visualEditor));
+        }
+        toast('Image inserted');
+    };
+    reader.readAsDataURL(item.getAsFile());
+}
+
+function insertImageIntoVisualEditor(editor, src) {
+    editor.focus();
+    const img = document.createElement('img');
+    img.className = 'editor-image';
+    img.src = src;
+    img.alt = 'pasted image';
+    img.dataset.src = src;
+    img.dataset.alt = 'pasted image';
+    img.contentEditable = 'false';
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(img);
+        const spacer = document.createTextNode(' ');
+        img.after(spacer);
+        range.setStartAfter(spacer);
+        range.setEndAfter(spacer);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    } else {
+        editor.append(img);
+    }
+}
+
+function insertAtCursor(textarea, text) {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const before = textarea.value.slice(0, start);
+    const after = textarea.value.slice(end);
+    const lead = before && !before.endsWith('\n') ? '\n' : '';
+    const trail = after && !after.startsWith('\n') ? '\n' : '';
+    const insert = `${lead}${text}${trail}`;
+    textarea.value = before + insert + after;
+    const pos = before.length + insert.length;
+    textarea.setSelectionRange(pos, pos);
+    autoResize(textarea);
+}
+
+function extractImages(markdown) {
+    const images = [];
+    const re = /!\[([^\]]*)\]\((data:image\/[^)]+)\)/g;
+    let match;
+    while ((match = re.exec(markdown || ''))) {
+        images.push({ alt: match[1] || 'image', src: match[2] });
+    }
+    return images;
+}
+
+function removeMarkdownImage(value, imageIndex) {
+    let index = -1;
+    return String(value || '').replace(/!\[[^\]]*\]\(data:image\/[^)]+\)/g, match => {
+        index += 1;
+        return index === imageIndex ? '' : match;
+    }).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function removeImageFromQuestionField(question, field, imageIndex) {
+    if (field === 'text') {
+        question.text = removeMarkdownImage(question.text, imageIndex);
+        return;
+    }
+    const optionMatch = field.match(/^options\.(\d+)\.text$/);
+    if (optionMatch) {
+        const option = question.options[Number(optionMatch[1])];
+        if (option) option.text = removeMarkdownImage(option.text, imageIndex);
+    }
+}
+
+function allQuestions(paper) {
+    return paper.sections.flatMap(section => section.questions);
+}
+
+function countQuestions(paper) {
+    return allQuestions(paper).length;
+}
+
+function totalMarks(paper) {
+    return allQuestions(paper).reduce((sum, q) => sum + (Number(q.marks) || 1), 0);
+}
+
+function exportBackup() {
+    downloadBlob(
+        new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }),
+        `mcq-paper-backup-${Date.now()}.json`
+    );
+}
+
+function importBackup(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            const imported = JSON.parse(reader.result);
+            state = Array.isArray(imported) ? { papers: imported, activePaperId: imported[0]?.id, activeSectionId: imported[0]?.sections?.[0]?.id } : imported;
+            normalize();
+            render();
+            toast('Imported');
+        } catch (err) {
+            toast('Import failed');
+        } finally {
+            els.fileInput.value = '';
+        }
+    };
+    reader.readAsText(file);
+}
+
+function exportWord() {
+    const paper = getActivePaper();
+    if (!paper) return;
+    const html = buildWordHtml(paper);
+    downloadBlob(new Blob([html], { type: 'application/msword' }), `${fileName(paper.title)}.doc`);
+    toast('Word file exported');
+}
+
+function buildWordHtml(paper) {
+    const questionBlocks = [];
+    let globalIndex = 0;
+    paper.sections.forEach(section => {
+        if (!section.questions.length) return;
+        questionBlocks.push(`<h2>${esc(section.name)}</h2>`);
+        section.questions.forEach(question => {
+            globalIndex += 1;
+            questionBlocks.push(`
+                <div class="question">
+                    <p><b>${globalIndex})</b> ${formatForWord(question.text)}</p>
+                    ${optionsForWord(question)}
+                </div>
+            `);
+        });
+    });
+    const key = allQuestions(paper).map((q, i) => `${i + 1}. ${LABELS[q.correctIndex] || 'A'}`).join('&nbsp;&nbsp;&nbsp;');
+    return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                @page { margin: 0.65in; }
+                body { font-family: "Times New Roman", serif; font-size: 12pt; color: #111; }
+                h1 { text-align: center; font-size: 18pt; margin: 0 0 6pt; }
+                .meta { text-align: center; margin-bottom: 10pt; }
+                .name { margin: 10pt 0; }
+                h2 { font-size: 13pt; margin: 12pt 0 6pt; border-bottom: 1px solid #888; }
+                .question { page-break-inside: avoid; margin: 0 0 8pt; }
+                .options { width: 100%; border-collapse: collapse; margin-left: 18pt; }
+                .options td { vertical-align: top; padding: 2pt 8pt 2pt 0; }
+                img { max-width: 180px; max-height: 120px; vertical-align: middle; }
+                .answer-key { margin-top: 18pt; border-top: 1px solid #888; padding-top: 8pt; }
+            </style>
+        </head>
+        <body>
+            <h1>${esc(paper.title)}</h1>
+            <div class="meta">
+                Class: ${esc(paper.meta.className || '')} &nbsp;&nbsp;
+                Subject: ${esc(paper.meta.subject || '')} &nbsp;&nbsp;
+                ${esc(paper.meta.testName || '')} &nbsp;&nbsp;
+                Time: ${esc(paper.meta.duration || '')} &nbsp;&nbsp;
+                Marks: ${esc(paper.meta.marks || totalMarks(paper))}
+            </div>
+            <div class="name">Name: ________________________________</div>
+            ${paper.meta.instructions ? `<p><b>Instructions:</b> ${formatForWord(paper.meta.instructions)}</p>` : ''}
+            ${questionBlocks.join('')}
+            <div class="answer-key"><b>Answer Key:</b><br>${key}</div>
+        </body>
+        </html>
+    `;
+}
+
+function optionsForWord(question) {
+    const rows = question.layout === 'row'
+        ? [[0, 1, 2, 3]]
+        : question.layout === 'grid2'
+            ? [[0, 1], [2, 3]]
+            : [[0], [1], [2], [3]];
+    return `
+        <table class="options">
+            ${rows.map(row => `
+                <tr>
+                    ${row.map(index => `<td><b>${LABELS[index]}.</b> ${formatForWord(question.options[index]?.text || '')}</td>`).join('')}
+                </tr>
+            `).join('')}
+        </table>
+    `;
+}
+
+function formatForWord(value) {
+    return esc(value || '')
+        .replace(/!\[([^\]]*)\]\((data:image\/[^)]+)\)/g, '<img alt="$1" src="$2">')
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+        .replace(/\*([^*]+)\*/g, '<i>$1</i>')
+        .replace(/\\\((.*?)\\\)/g, '<span>$1</span>')
+        .replace(/\n/g, '<br>');
+}
+
+function downloadBlob(blob, name) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function fileName(value) {
+    return (value || 'question-paper').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_');
+}
+
+function autoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
+function renderMathSoon() {
+    requestAnimationFrame(() => {
+        if (!window.renderMathInElement) return;
+        try {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    { left: '$$', right: '$$', display: true },
+                    { left: '\\[', right: '\\]', display: true },
+                    { left: '\\(', right: '\\)', display: false },
+                ],
+                ignoredTags: ['textarea', 'script', 'style'],
+                throwOnError: false,
+            });
+        } catch (err) {}
+    });
+}
+
+function toast(message) {
+    els.toast.textContent = message;
+    els.toast.classList.add('show');
+    clearTimeout(els.toast._timer);
+    els.toast._timer = setTimeout(() => els.toast.classList.remove('show'), 2200);
+}
+
+function deepCopy(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function esc(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+}
+
+function cssEscape(value) {
+    if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(value);
+    return String(value).replace(/["\\]/g, '\\$&');
+}
