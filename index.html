@@ -420,6 +420,26 @@
         </div>
     </div>
 
+    <!-- Delete Paper Confirmation Modal -->
+    <div class="modal-overlay" id="deletePaperModal" hidden>
+        <div class="section-modal-content">
+            <div class="section-modal-header">
+                <h2>Delete Question Paper</h2>
+                <button type="button" class="modal-close-btn" id="closeDeletePaperModalBtn" title="Close">&times;</button>
+            </div>
+            <div class="section-modal-body">
+                <p style="font-size: 14px; color: var(--text); line-height: 1.5; margin: 0 0 10px 0;">
+                    Are you sure you want to permanently delete <strong id="deletePaperNameLabel">"Question Paper"</strong>?
+                </p>
+                <p style="font-size: 13px; color: var(--muted); margin: 0;">This action cannot be undone.</p>
+            </div>
+            <div class="section-modal-footer">
+                <button type="button" class="btn secondary" id="cancelDeletePaperModalBtn">Cancel</button>
+                <button type="button" class="btn danger" id="confirmDeletePaperModalBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Custom context menu for Mermaid diagrams -->
     <div class="custom-context-menu" id="customContextMenu" hidden>
         <button type="button" class="context-menu-item" id="contextEditDiagram">✏️ Edit Diagram</button>

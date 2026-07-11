@@ -129,6 +129,7 @@ initEquationModal();
 initGlobalToolbar();
 initSectionModal();
 initAddQuestionsModal();
+initDeletePaperModal();
 render();
 
 function load() {
@@ -276,15 +277,23 @@ function renderPaperList() {
     els.paperList.innerHTML = filteredPapers.map(paper => {
         const count = countQuestions(paper);
         return `
-            <button class="paper-row ${paper.id === state.activePaperId ? 'active' : ''}" data-action="select-paper" data-id="${paper.id}">
-                <strong>${esc(paper.title)}</strong>
-                <span>${esc(paper.meta.className || 'Class')} · ${count} questions</span>
-                ${paper.tags && paper.tags.length ? `
-                <div class="sidebar-paper-tags">
-                    ${paper.tags.map(tag => `<span class="sidebar-tag-chip">${esc(tag)}</span>`).join('')}
+            <div class="paper-row-container ${paper.id === state.activePaperId ? 'active' : ''}">
+                <button class="paper-row" data-action="select-paper" data-id="${paper.id}">
+                    <strong>${esc(paper.title)}</strong>
+                    <span>${esc(paper.meta.className || 'Class')} · ${count} questions</span>
+                    ${paper.tags && paper.tags.length ? `
+                    <div class="sidebar-paper-tags">
+                        ${paper.tags.map(tag => `<span class="sidebar-tag-chip">${esc(tag)}</span>`).join('')}
+                    </div>
+                    ` : ''}
+                </button>
+                <button type="button" class="paper-menu-btn" data-action="toggle-paper-menu" data-id="${paper.id}">⋮</button>
+                <div class="paper-dropdown-menu" data-menu-id="${paper.id}" hidden>
+                    <button type="button" class="menu-item" data-menu-action="open" data-id="${paper.id}">Open</button>
+                    <button type="button" class="menu-item" data-menu-action="rename" data-id="${paper.id}">Rename</button>
+                    <button type="button" class="menu-item danger" data-menu-action="delete" data-id="${paper.id}">Delete</button>
                 </div>
-                ` : ''}
-            </button>
+            </div>
         `;
     }).join('');
     
@@ -293,6 +302,64 @@ function renderPaperList() {
             state.activePaperId = btn.dataset.id;
             state.activeSectionId = getActivePaper().sections[0]?.id || null;
             render();
+        });
+    });
+
+    els.paperList.querySelectorAll('[data-action="toggle-paper-menu"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const paperId = btn.dataset.id;
+            const dropdowns = els.paperList.querySelectorAll('.paper-dropdown-menu');
+            dropdowns.forEach(menu => {
+                if (menu.dataset.menuId === paperId) {
+                    if (menu.hasAttribute('hidden')) {
+                        menu.removeAttribute('hidden');
+                    } else {
+                        menu.setAttribute('hidden', 'true');
+                    }
+                } else {
+                    menu.setAttribute('hidden', 'true');
+                }
+            });
+        });
+    });
+
+    els.paperList.querySelectorAll('[data-menu-action="open"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const paperId = btn.dataset.id;
+            state.activePaperId = paperId;
+            state.activeSectionId = getActivePaper().sections[0]?.id || null;
+            render();
+        });
+    });
+
+    els.paperList.querySelectorAll('[data-menu-action="rename"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const paperId = btn.dataset.id;
+            const paper = state.papers.find(p => p.id === paperId);
+            if (paper) {
+                const newTitle = prompt('Rename Question Paper', paper.title);
+                if (newTitle && newTitle.trim()) {
+                    paper.title = newTitle.trim();
+                    render();
+                }
+            }
+        });
+    });
+
+    els.paperList.querySelectorAll('[data-menu-action="delete"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const paperId = btn.dataset.id;
+            const paper = state.papers.find(p => p.id === paperId);
+            if (paper) {
+                state.pendingDeletePaperId = paperId;
+                const modal = document.getElementById('deletePaperModal');
+                const label = document.getElementById('deletePaperNameLabel');
+                if (modal && label) {
+                    label.textContent = `"${paper.title}"`;
+                    modal.removeAttribute('hidden');
+                }
+            }
         });
     });
     
@@ -340,7 +407,10 @@ function renderSidebarFilterTags() {
 
 function renderPaperSetup() {
     const paper = getActivePaper();
-    if (!paper) return;
+    if (!paper) {
+        els.paperSetup.innerHTML = '';
+        return;
+    }
     els.paperSetup.innerHTML = `
         <div class="setup-grid">
             ${field('Title', 'title', paper.title, 'Paper title')}
@@ -581,7 +651,10 @@ function field(label, key, value, placeholder) {
 
 function renderSectionTabs() {
     const paper = getActivePaper();
-    if (!paper) return;
+    if (!paper) {
+        els.sectionTabs.innerHTML = '';
+        return;
+    }
     els.sectionTabs.innerHTML = `
         ${paper.sections.map(section => `
             <button class="section-tab ${section.id === state.activeSectionId ? 'active' : ''}" data-section="${section.id}">
@@ -601,8 +674,16 @@ function renderSectionTabs() {
 }
 
 function renderWorkbench() {
+    const paper = getActivePaper();
     const section = getActiveSection();
     const globalToolbar = document.getElementById('globalToolbar');
+    
+    if (!paper) {
+        if (globalToolbar) globalToolbar.hidden = true;
+        els.workbench.innerHTML = `<div class="empty-state"><strong>No papers yet</strong>Click the "+" button in the sidebar to create a new question paper.</div>`;
+        return;
+    }
+    
     if (!section) {
         if (globalToolbar) globalToolbar.hidden = true;
         els.workbench.innerHTML = `<div class="empty-state"><strong>No section selected</strong>Add a section to start writing questions.</div>`;
@@ -2614,7 +2695,10 @@ function markdownFromCode(code, imageMapJson) {
 
 function renderTeacherPanel() {
     const paper = getActivePaper();
-    if (!paper) return;
+    if (!paper) {
+        els.teacherPanel.innerHTML = '';
+        return;
+    }
     const questions = allQuestions(paper);
     const unanswered = questions.filter(q => !q.options.some(o => o.text.trim())).length;
     els.teacherPanel.innerHTML = `
@@ -2946,6 +3030,47 @@ function initAddQuestionsModal() {
         if (e.key === 'Enter') {
             confirmBtn.click();
         }
+    });
+}
+
+function initDeletePaperModal() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const modal = document.getElementById('deletePaperModal');
+    const closeBtn = document.getElementById('closeDeletePaperModalBtn');
+    const cancelBtn = document.getElementById('cancelDeletePaperModalBtn');
+    const confirmBtn = document.getElementById('confirmDeletePaperModalBtn');
+    
+    if (!modal || !closeBtn || !cancelBtn || !confirmBtn) return;
+    
+    const hideModal = () => {
+        modal.setAttribute('hidden', 'true');
+        state.pendingDeletePaperId = null;
+    };
+    
+    closeBtn.addEventListener('click', hideModal);
+    cancelBtn.addEventListener('click', hideModal);
+    
+    confirmBtn.addEventListener('click', () => {
+        const paperId = state.pendingDeletePaperId;
+        if (paperId) {
+            const wasActive = state.activePaperId === paperId;
+            state.papers = state.papers.filter(p => p.id !== paperId);
+            
+            if (wasActive) {
+                state.activePaperId = state.papers[0]?.id || null;
+                const activePaper = getActivePaper();
+                state.activeSectionId = activePaper?.sections[0]?.id || null;
+            }
+            
+            hideModal();
+            render();
+            toast('Question paper deleted');
+        }
+    });
+
+    document.addEventListener('click', () => {
+        const dropdowns = document.querySelectorAll('.paper-dropdown-menu');
+        dropdowns.forEach(menu => menu.setAttribute('hidden', 'true'));
     });
 }
 

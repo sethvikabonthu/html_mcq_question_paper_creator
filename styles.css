@@ -203,25 +203,35 @@ button {
     padding: 10px;
 }
 
-.paper-row {
-    width: 100%;
-    text-align: left;
-    border: 1px solid transparent;
-    background: transparent;
+.paper-row-container {
+    position: relative;
+    display: flex;
+    align-items: center;
     border-radius: 8px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+}
+
+.paper-row-container:hover {
+    background: #f3f7fb;
+}
+
+.paper-row-container.active {
+    background: var(--primary-soft);
+    border-color: #9dc4e1;
+}
+
+.paper-row {
+    flex-grow: 1;
+    text-align: left;
+    border: none;
+    background: transparent;
     padding: 10px;
     display: grid;
     gap: 5px;
     color: var(--text);
-}
-
-.paper-row:hover {
-    background: #f3f7fb;
-}
-
-.paper-row.active {
-    background: var(--primary-soft);
-    border-color: #9dc4e1;
+    cursor: pointer;
+    overflow: hidden;
 }
 
 .paper-row strong {
@@ -235,6 +245,63 @@ button {
 .paper-row span {
     color: var(--muted);
     font-size: 12px;
+}
+
+.paper-menu-btn {
+    border: none;
+    background: transparent;
+    font-size: 18px;
+    color: var(--muted);
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 0 8px 8px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+}
+
+.paper-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text);
+}
+
+.paper-dropdown-menu {
+    position: absolute;
+    right: 10px;
+    top: 36px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    min-width: 110px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+}
+
+.paper-dropdown-menu .menu-item {
+    border: none;
+    background: transparent;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    width: 100%;
+}
+
+.paper-dropdown-menu .menu-item:hover {
+    background: #f3f7fb;
+}
+
+.paper-dropdown-menu .menu-item.danger {
+    color: #ef4444;
+}
+
+.paper-dropdown-menu .menu-item.danger:hover {
+    background: #fef2f2;
 }
 
 .workspace {
