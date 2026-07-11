@@ -373,6 +373,53 @@
         </div>
     </div>
 
+    <!-- Create Section Modal Dialog -->
+    <div class="modal-overlay" id="sectionModal" hidden>
+        <div class="section-modal-content">
+            <div class="section-modal-header">
+                <h2>Create Section</h2>
+                <button type="button" class="modal-close-btn" id="closeSectionModalBtn" title="Close">&times;</button>
+            </div>
+            <div class="section-modal-body">
+                <div class="input-group">
+                    <label for="newSectionName">Section Name</label>
+                    <input type="text" id="newSectionName" placeholder="e.g. Mathematics, Physics, Chemistry" autocomplete="off" />
+                </div>
+                <div class="input-group" style="margin-top: 16px;">
+                    <label for="newSectionQuestionsCount">Number of Questions</label>
+                    <input type="number" id="newSectionQuestionsCount" value="5" min="1" step="1" />
+                </div>
+                <div class="validation-message" id="sectionValidationMessage" style="color: #ef4444; font-size: 13px; font-weight: 500; margin-top: 12px;" hidden></div>
+            </div>
+            <div class="section-modal-footer">
+                <button type="button" class="btn secondary" id="cancelSectionModalBtn">Cancel</button>
+                <button type="button" class="btn primary" id="confirmSectionModalBtn">Create Section</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Questions Modal Dialog -->
+    <div class="modal-overlay" id="addQuestionsModal" hidden>
+        <div class="section-modal-content">
+            <div class="section-modal-header">
+                <h2 id="addQuestionsModalTitle">Add Questions to Section</h2>
+                <button type="button" class="modal-close-btn" id="closeAddQuestionsModalBtn" title="Close">&times;</button>
+            </div>
+            <div class="section-modal-body">
+                <div style="font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 12px;" id="currentQuestionsCountLabel">Current Questions: 0</div>
+                <div class="input-group">
+                    <label for="additionalQuestionsCount">Additional Questions</label>
+                    <input type="number" id="additionalQuestionsCount" value="5" min="1" step="1" />
+                </div>
+                <div class="validation-message" id="addQuestionsValidationMessage" style="color: #ef4444; font-size: 13px; font-weight: 500; margin-top: 12px;" hidden></div>
+            </div>
+            <div class="section-modal-footer">
+                <button type="button" class="btn secondary" id="cancelAddQuestionsModalBtn">Cancel</button>
+                <button type="button" class="btn primary" id="confirmAddQuestionsModalBtn">Add Questions</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Custom context menu for Mermaid diagrams -->
     <div class="custom-context-menu" id="customContextMenu" hidden>
         <button type="button" class="context-menu-item" id="contextEditDiagram">✏️ Edit Diagram</button>

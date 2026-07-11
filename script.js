@@ -127,6 +127,8 @@ document.addEventListener('paste', handlePaste);
 load();
 initEquationModal();
 initGlobalToolbar();
+initSectionModal();
+initAddQuestionsModal();
 render();
 
 function load() {
@@ -592,6 +594,7 @@ function renderSectionTabs() {
         btn.addEventListener('click', () => {
             state.activeSectionId = btn.dataset.section;
             render();
+            openAddQuestionsModal();
         });
     });
     document.getElementById('addSectionBtn').addEventListener('click', addSection);
@@ -649,9 +652,18 @@ function renderWorkbench() {
         renderPrintPaper();
         save();
     });
-    document.getElementById('addQuestionBtn').addEventListener('click', () => addQuestion(section.id));
-    document.getElementById('bottomAddQuestionBtn').addEventListener('click', () => addQuestion(section.id));
-    document.getElementById('bottomAddSectionBtn').addEventListener('click', addSection);
+    const addQBtn = document.getElementById('addQuestionBtn');
+    if (addQBtn) {
+        addQBtn.addEventListener('click', () => addQuestion(section.id));
+    }
+    const bottomAddQBtn = document.getElementById('bottomAddQuestionBtn');
+    if (bottomAddQBtn) {
+        bottomAddQBtn.addEventListener('click', () => addQuestion(section.id));
+    }
+    const bottomAddSectBtn = document.getElementById('bottomAddSectionBtn');
+    if (bottomAddSectBtn) {
+        bottomAddSectBtn.addEventListener('click', addSection);
+    }
     document.getElementById('reuseQuestionBtn').addEventListener('click', toggleReusePanel);
     document.getElementById('reuseSearchInput').addEventListener('input', renderReuseResults);
     document.getElementById('duplicateSectionBtn').addEventListener('click', duplicateSection);
@@ -724,22 +736,24 @@ function questionCard(question, index) {
                     })}
                     <div class="paste-hint">Paste images directly at the cursor. Use simple markdown for bold, italics, and math.</div>
                 </div>
-                <div class="question-tools">
-                    <button class="small-btn" data-question-action="move-up" data-qid="${question.id}">↑</button>
-                    <button class="small-btn" data-question-action="move-down" data-qid="${question.id}">↓</button>
-                    <button class="small-btn" data-question-action="duplicate" data-qid="${question.id}"${UI_CONFIG.showCopy ? '' : ' style="display: none;"'}>Copy</button>
-                    <button class="small-btn danger" data-question-action="delete" data-qid="${question.id}">Delete</button>
+                <div class="question-tools-column">
+                    <div class="question-tools">
+                        <button class="small-btn" data-question-action="move-up" data-qid="${question.id}">↑</button>
+                        <button class="small-btn" data-question-action="move-down" data-qid="${question.id}">↓</button>
+                        <button class="small-btn" data-question-action="duplicate" data-qid="${question.id}"${UI_CONFIG.showCopy ? '' : ' style="display: none;"'}>Copy</button>
+                        <button class="small-btn danger" data-question-action="delete" data-qid="${question.id}">Delete</button>
+                    </div>
+                    <div class="segmented">
+                        ${LAYOUTS.map(layout => `
+                            <button class="${question.layout === layout.id ? 'active' : ''}" data-layout="${layout.id}" data-qid="${question.id}">${layout.label}</button>
+                        `).join('')}
+                    </div>
                 </div>
             </div>
             <div class="options-grid ${question.layout}">
                 ${question.options.map((option, optionIndex) => optionCard(question, option, optionIndex)).join('')}
             </div>
             <div class="layout-row">
-                <div class="segmented">
-                    ${LAYOUTS.map(layout => `
-                        <button class="${question.layout === layout.id ? 'active' : ''}" data-layout="${layout.id}" data-qid="${question.id}">${layout.label}</button>
-                    `).join('')}
-                </div>
                 <span class="paste-hint">Answer: ${LABELS[question.correctIndex] || 'A'}</span>
             </div>
         </article>
@@ -907,16 +921,19 @@ function applyFormat(editorId, format) {
     }
     
     const visual = wrapper.querySelector('[data-visual-editor]');
-    visual.focus();
-    
     const selection = window.getSelection();
-    if (saved && saved.isVisual && saved.range && selection) {
-        selection.removeAllRanges();
-        selection.addRange(saved.range);
+    
+    if (document.activeElement !== visual) {
+        visual.focus();
+        if (saved && saved.isVisual && saved.range && selection) {
+            selection.removeAllRanges();
+            selection.addRange(saved.range);
+        }
     }
     
     document.execCommand(format === 'bold' ? 'bold' : 'italic', false, null);
     updateFieldFromEditor(editorId, markdownFromVisual(visual));
+    updateActiveSelection();
 }
 
 let activeInsertEquationEditorId = null;
@@ -2735,22 +2752,201 @@ function createPaper() {
 }
 
 function addSection() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
     const paper = getActivePaper();
-    const section = { 
-        id: uid('section'), 
-        name: `Section ${paper.sections.length + 1}`, 
-        layout: paper.layout || 'row',
-        questions: [] 
+    const modal = document.getElementById('sectionModal');
+    const nameInput = document.getElementById('newSectionName');
+    const countInput = document.getElementById('newSectionQuestionsCount');
+    const validation = document.getElementById('sectionValidationMessage');
+    
+    if (!modal || !nameInput || !countInput) return;
+    
+    nameInput.value = `Section ${paper.sections.length + 1}`;
+    countInput.value = '5';
+    if (validation) {
+        validation.textContent = '';
+        validation.hidden = true;
+    }
+    
+    modal.removeAttribute('hidden');
+    nameInput.focus();
+    nameInput.select();
+}
+
+function initSectionModal() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const modal = document.getElementById('sectionModal');
+    const closeBtn = document.getElementById('closeSectionModalBtn');
+    const cancelBtn = document.getElementById('cancelSectionModalBtn');
+    const confirmBtn = document.getElementById('confirmSectionModalBtn');
+    const nameInput = document.getElementById('newSectionName');
+    const countInput = document.getElementById('newSectionQuestionsCount');
+    const validation = document.getElementById('sectionValidationMessage');
+    
+    if (!modal || !closeBtn || !cancelBtn || !confirmBtn) return;
+    
+    const hideModal = () => {
+        modal.setAttribute('hidden', 'true');
     };
-    paper.sections.push(section);
-    state.activeSectionId = section.id;
-    render();
-    setTimeout(() => {
-        const input = document.getElementById('sectionNameInput');
-        input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        input?.focus();
-        input?.select();
-    }, 40);
+    
+    closeBtn.addEventListener('click', hideModal);
+    cancelBtn.addEventListener('click', hideModal);
+    
+    confirmBtn.addEventListener('click', () => {
+        const name = nameInput.value.trim();
+        const countVal = countInput.value.trim();
+        const count = parseInt(countVal, 10);
+        
+        if (!name) {
+            if (validation) {
+                validation.textContent = 'Please enter a section name.';
+                validation.hidden = false;
+            }
+            nameInput.focus();
+            return;
+        }
+        
+        if (isNaN(count) || count <= 0 || !/^\d+$/.test(countVal)) {
+            if (validation) {
+                validation.textContent = 'Please enter a valid number of questions.';
+                validation.hidden = false;
+            }
+            countInput.focus();
+            return;
+        }
+        
+        if (validation) {
+            validation.hidden = true;
+        }
+        
+        const paper = getActivePaper();
+        const section = { 
+            id: uid('section'), 
+            name: name, 
+            layout: paper.layout || 'row',
+            questions: [] 
+        };
+        
+        for (let i = 0; i < count; i++) {
+            const q = newQuestion('', ['', '', '', ''], 0);
+            q.layout = section.layout;
+            section.questions.push(q);
+        }
+        
+        paper.sections.push(section);
+        state.activeSectionId = section.id;
+        hideModal();
+        render();
+        save();
+        
+        setTimeout(() => {
+            const cards = document.querySelectorAll('.question-card');
+            if (cards.length > 0) {
+                const first = cards[0];
+                first?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                first?.querySelector('[data-visual-editor]')?.focus();
+            }
+        }, 80);
+    });
+    
+    const handleEnter = (e) => {
+        if (e.key === 'Enter') {
+            confirmBtn.click();
+        }
+    };
+    nameInput.addEventListener('keydown', handleEnter);
+    countInput.addEventListener('keydown', handleEnter);
+}
+
+function openAddQuestionsModal() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const section = getActiveSection();
+    if (!section) return;
+    
+    const modal = document.getElementById('addQuestionsModal');
+    const titleEl = document.getElementById('addQuestionsModalTitle');
+    const labelEl = document.getElementById('currentQuestionsCountLabel');
+    const countInput = document.getElementById('additionalQuestionsCount');
+    const validation = document.getElementById('addQuestionsValidationMessage');
+    
+    if (!modal || !titleEl || !labelEl || !countInput) return;
+    
+    titleEl.textContent = `Add Questions to ${section.name}`;
+    labelEl.textContent = `Current Questions: ${section.questions.length}`;
+    countInput.value = '5';
+    if (validation) {
+        validation.textContent = '';
+        validation.hidden = true;
+    }
+    
+    modal.removeAttribute('hidden');
+    countInput.focus();
+    countInput.select();
+}
+
+function initAddQuestionsModal() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const modal = document.getElementById('addQuestionsModal');
+    const closeBtn = document.getElementById('closeAddQuestionsModalBtn');
+    const cancelBtn = document.getElementById('cancelAddQuestionsModalBtn');
+    const confirmBtn = document.getElementById('confirmAddQuestionsModalBtn');
+    const countInput = document.getElementById('additionalQuestionsCount');
+    const validation = document.getElementById('addQuestionsValidationMessage');
+    
+    if (!modal || !closeBtn || !cancelBtn || !confirmBtn) return;
+    
+    const hideModal = () => {
+        modal.setAttribute('hidden', 'true');
+    };
+    
+    closeBtn.addEventListener('click', hideModal);
+    cancelBtn.addEventListener('click', hideModal);
+    
+    confirmBtn.addEventListener('click', () => {
+        const countVal = countInput.value.trim();
+        const count = parseInt(countVal, 10);
+        
+        if (isNaN(count) || count <= 0 || !/^\d+$/.test(countVal)) {
+            if (validation) {
+                validation.textContent = 'Please enter a valid number of questions.';
+                validation.hidden = false;
+            }
+            countInput.focus();
+            return;
+        }
+        
+        if (validation) {
+            validation.hidden = true;
+        }
+        
+        const section = getActiveSection();
+        if (section) {
+            const startQuestionsIndex = section.questions.length;
+            for (let i = 0; i < count; i++) {
+                const q = newQuestion('', ['', '', '', ''], 0);
+                q.layout = section.layout;
+                section.questions.push(q);
+            }
+            hideModal();
+            render();
+            save();
+            
+            setTimeout(() => {
+                const cards = document.querySelectorAll('.question-card');
+                if (cards.length > startQuestionsIndex) {
+                    const firstNew = cards[startQuestionsIndex];
+                    firstNew?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    firstNew?.querySelector('[data-visual-editor]')?.focus();
+                }
+            }, 80);
+        }
+    });
+    
+    countInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            confirmBtn.click();
+        }
+    });
 }
 
 function duplicateSection() {

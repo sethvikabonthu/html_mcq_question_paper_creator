@@ -469,6 +469,13 @@ button {
     align-items: center;
 }
 
+.question-tools-column {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
 .editor {
     width: 100%;
     min-height: 58px;
@@ -2092,4 +2099,72 @@ div[class*="ML__keyboard"] {
     height: 18px;
     background: var(--line);
     margin: 0 6px;
+}
+
+/* Section Creation Modal Styles */
+.section-modal-content {
+    background: #fff;
+    width: 90%;
+    max-width: 440px;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.section-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+}
+
+.section-modal-header h2 {
+    font-size: 16px;
+    font-weight: 800;
+    color: #123a5c;
+    margin: 0;
+}
+
+.section-modal-body {
+    padding: 20px;
+}
+
+.section-modal-body .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.section-modal-body .input-group label {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+
+.section-modal-body .input-group input {
+    height: 38px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0 12px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.section-modal-body .input-group input:focus {
+    border-color: var(--primary);
+}
+
+.section-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 20px;
+    border-top: 1px solid var(--line);
+    background: #f8fafc;
 }
