@@ -2235,3 +2235,28 @@ div[class*="ML__keyboard"] {
     border-top: 1px solid var(--line);
     background: #f8fafc;
 }
+
+/* Custom styling for Logo resizing & institution details card */
+.logo-and-inst-card {
+    transition: all 0.2s ease-in-out;
+}
+.logo-setup-container:hover {
+    border-color: var(--primary) !important;
+}
+.logo-setup-container.selected {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(23, 105, 170, 0.15);
+}
+.logo-delete-btn:hover {
+    background: #dc2626 !important;
+}
+.print-meta-grid div {
+    margin-bottom: 2px;
+}
+
+.logo-resize-handle {
+    display: none;
+}
+.logo-setup-container.selected .logo-resize-handle {
+    display: block;
+}

@@ -87,6 +87,7 @@ let state = {
     activeSectionId: null,
     filterSearchQuery: '',
     filterSelectedTags: [],
+    isHoveringLogoArea: false,
 };
 
 let cachedUniqueTagsStr = '';
@@ -130,6 +131,8 @@ initGlobalToolbar();
 initSectionModal();
 initAddQuestionsModal();
 initDeletePaperModal();
+initWordExportModal();
+initLogoContextMenu();
 render();
 
 function load() {
@@ -159,6 +162,12 @@ function normalize() {
     state.papers.forEach(paper => {
         paper.meta ||= {};
         paper.tags ||= [];
+        paper.logo ||= '';
+        paper.logoWidth ||= 120;
+        paper.logoHeight ||= 120;
+        paper.meta.institutionName ||= '';
+        paper.meta.institutionSubtitle ||= '';
+        paper.meta.date ||= '';
         paper.layout = ['row', 'grid2', 'column'].includes(paper.layout) ? paper.layout : 'row';
         paper.sections ||= [];
         paper.sections.forEach(section => {
@@ -412,6 +421,31 @@ function renderPaperSetup() {
         return;
     }
     els.paperSetup.innerHTML = `
+        <div class="logo-and-inst-card" style="display: flex; gap: 20px; align-items: center; background: #f8fafc; padding: 16px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px;">
+            <div class="logo-setup-container" id="logoSetupContainer" style="position: relative; width: ${paper.logoWidth || 120}px; height: ${paper.logoHeight || 120}px; border: 2px dashed var(--line); border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: #ffffff; user-select: none;">
+                <input type="file" id="logoFileInput" accept="image/*" style="display: none;" />
+                ${paper.logo ? `
+                    <img src="${paper.logo}" id="logoImg" alt="Logo" style="width: 100%; height: 100%; object-fit: contain; pointer-events: none;" />
+                    <div class="logo-resize-handle top-left" style="position: absolute; width: 8px; height: 8px; background: var(--primary); border: 1px solid #fff; border-radius: 50%; top: -4px; left: -4px; cursor: nwse-resize;"></div>
+                    <div class="logo-resize-handle top-right" style="position: absolute; width: 8px; height: 8px; background: var(--primary); border: 1px solid #fff; border-radius: 50%; top: -4px; right: -4px; cursor: nesw-resize;"></div>
+                    <div class="logo-resize-handle bottom-left" style="position: absolute; width: 8px; height: 8px; background: var(--primary); border: 1px solid #fff; border-radius: 50%; bottom: -4px; left: -4px; cursor: nesw-resize;"></div>
+                    <div class="logo-resize-handle bottom-right" style="position: absolute; width: 8px; height: 8px; background: var(--primary); border: 1px solid #fff; border-radius: 50%; bottom: -4px; right: -4px; cursor: nwse-resize;"></div>
+                ` : `
+                    <div style="font-size: 11px; text-align: center; color: var(--text-muted); padding: 8px; pointer-events: none;">Click to Upload Logo or Paste Image</div>
+                `}
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+                <div class="field">
+                    <label>Institution Name</label>
+                    <input type="text" data-meta="institutionName" placeholder="e.g. Green Valley High School" value="${esc(paper.meta.institutionName || '')}" style="width: 100%;" />
+                </div>
+                <div class="field">
+                    <label>Institution Subtitle / Address</label>
+                    <input type="text" data-meta="institutionSubtitle" placeholder="e.g. New York, USA" value="${esc(paper.meta.institutionSubtitle || '')}" style="width: 100%;" />
+                </div>
+            </div>
+        </div>
+
         <div class="setup-grid">
             ${field('Title', 'title', paper.title, 'Paper title')}
             ${field('Class', 'className', paper.meta.className, 'IX')}
@@ -419,6 +453,7 @@ function renderPaperSetup() {
             ${field('Test', 'testName', paper.meta.testName, 'Unit Test')}
             ${field('Time', 'duration', paper.meta.duration, '1 hr')}
             ${field('Marks', 'marks', paper.meta.marks, '60')}
+            ${field('Date', 'date', paper.meta.date, 'DD/MM/YYYY')}
             
             <div class="field tags-field" style="grid-column: 2 / -1;">
                 <label>Tags</label>
@@ -463,6 +498,90 @@ function renderPaperSetup() {
             render();
         });
     });
+
+    const logoContainer = document.getElementById('logoSetupContainer');
+    if (logoContainer) {
+        const fileInput = document.getElementById('logoFileInput');
+        logoContainer.addEventListener('click', (e) => {
+            if (e.target.classList.contains('logo-resize-handle')) return;
+            if (paper.logo) {
+                logoContainer.classList.add('selected');
+            } else {
+                fileInput.click();
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    paper.logo = reader.result;
+                    save();
+                    render();
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+        
+        const handles = logoContainer.querySelectorAll('.logo-resize-handle');
+        handles.forEach(handle => {
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const startWidth = paper.logoWidth || 120;
+                const startHeight = paper.logoHeight || 120;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const isRight = handle.classList.contains('top-right') || handle.classList.contains('bottom-right');
+                const isBottom = handle.classList.contains('bottom-left') || handle.classList.contains('bottom-right');
+                
+                const onMouseMove = (moveEvent) => {
+                    let deltaX = moveEvent.clientX - startX;
+                    let deltaY = moveEvent.clientY - startY;
+                    
+                    let newWidth = startWidth + (isRight ? deltaX : -deltaX);
+                    let newHeight = startHeight + (isBottom ? deltaY : -deltaY);
+                    
+                    if (!moveEvent.shiftKey) {
+                        const ratio = startWidth / startHeight;
+                        if (Math.abs(deltaX) > Math.abs(deltaY)) {
+                            newHeight = newWidth / ratio;
+                        } else {
+                            newWidth = newHeight * ratio;
+                        }
+                    }
+                    
+                    newWidth = Math.max(40, Math.min(250, newWidth));
+                    newHeight = Math.max(40, Math.min(250, newHeight));
+                    
+                    logoContainer.style.width = `${newWidth}px`;
+                    logoContainer.style.height = `${newHeight}px`;
+                    
+                    paper.logoWidth = newWidth;
+                    paper.logoHeight = newHeight;
+                };
+                
+                const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    save();
+                    render();
+                };
+                
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        });
+        
+        logoContainer.addEventListener('mouseenter', () => {
+            state.isHoveringLogoArea = true;
+        });
+        logoContainer.addEventListener('mouseleave', () => {
+            state.isHoveringLogoArea = false;
+        });
+    }
 
     const container = document.getElementById('tagsInputContainer');
     const input = document.getElementById('tagTextInput');
@@ -1846,9 +1965,20 @@ function deleteSelectedToken(token) {
 
 // Centralized document-level click delegation
 document.addEventListener('click', e => {
-    // Hide context menu on any click OUTSIDE the context menu itself
+    // Hide context menus on any click OUTSIDE the context menus
     if (!e.target.closest('#customContextMenu')) {
         hideContextMenu();
+    }
+    if (!e.target.closest('#logoContextMenu')) {
+        hideLogoContextMenu();
+    }
+    
+    // Logo container selection / deselection
+    const logoContainer = e.target.closest('#logoSetupContainer');
+    if (logoContainer && logoContainer.querySelector('img')) {
+        logoContainer.classList.add('selected');
+    } else {
+        document.getElementById('logoSetupContainer')?.classList.remove('selected');
     }
     
     // 4. Check if clicked diagram corner delete button
@@ -1889,8 +2019,21 @@ document.addEventListener('click', e => {
     }
 });
 
-// Context Menu Right-click delegation on .mermaid-token
+// Context Menu Right-click delegation on .mermaid-token or logo container
 document.addEventListener('contextmenu', e => {
+    const logoContainer = e.target.closest('#logoSetupContainer');
+    if (logoContainer) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (logoContainer.querySelector('img')) {
+            logoContainer.classList.add('selected');
+        }
+        
+        showLogoContextMenu(e.clientX, e.clientY);
+        return;
+    }
+
     const token = e.target.closest('.mermaid-token');
     if (token) {
         const visualEditor = token.closest('[data-visual-editor]');
@@ -1959,6 +2102,19 @@ document.addEventListener('dblclick', e => {
 
 // Key listener to delete selected Mermaid diagrams
 document.addEventListener('keydown', e => {
+    if (state.isHoveringLogoArea) {
+        const paper = getActivePaper();
+        if (paper && (e.key === 'Backspace' || e.key === 'Delete')) {
+            if (paper.logo) {
+                e.preventDefault();
+                paper.logo = '';
+                save();
+                render();
+                toast('Logo deleted');
+                return;
+            }
+        }
+    }
     if (e.key === 'Backspace' || e.key === 'Delete') {
         const selectedToken = document.querySelector('.mermaid-token.selected');
         if (selectedToken) {
@@ -2776,19 +2932,37 @@ function renderPrintPaper() {
         `;
     }).join('');
 
+    const hasLogo = !!paper.logo;
+    const hasInst = !!(paper.meta.institutionName || paper.meta.institutionSubtitle);
+    let printHeaderHtml = '';
+
+    if (hasLogo || hasInst) {
+        printHeaderHtml += `
+            <div class="print-institution-row" style="display: flex; align-items: center; justify-content: center; gap: 20px; border-bottom: 2px solid #000; padding-bottom: 12px; margin-bottom: 16px;">
+                ${hasLogo ? `<img src="${paper.logo}" style="width: ${paper.logoWidth || 120}px; height: ${paper.logoHeight || 120}px; object-fit: contain;" />` : ''}
+                <div style="text-align: center;">
+                    ${paper.meta.institutionName ? `<h1 style="font-size: 16pt; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">${esc(paper.meta.institutionName)}</h1>` : ''}
+                    ${paper.meta.institutionSubtitle ? `<h2 style="font-size: 11pt; font-weight: 500; margin: 4px 0 0 0; color: #333;">${esc(paper.meta.institutionSubtitle)}</h2>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
     container.innerHTML = `
         <div class="print-paper">
-            <div class="print-header">
+            ${printHeaderHtml}
+            <div class="print-header" style="${(hasLogo || hasInst) ? 'border-top: none; padding-top: 0;' : ''}">
                 <h1 class="print-paper-title">${esc(paper.title || 'Question Paper')}</h1>
-                ${paper.meta.testName ? `<h2 class="print-test-name">${esc(paper.meta.testName)}</h2>` : ''}
-                <div class="print-meta-grid">
-                    <div><strong>Subject:</strong> ${esc(paper.meta.subject || '')}</div>
+                <div class="print-meta-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; border-bottom: 1px solid #000; border-top: 1px solid #000; padding: 8px 0; margin-bottom: 16px; font-size: 10pt; text-align: left;">
                     <div><strong>Class:</strong> ${esc(paper.meta.className || '')}</div>
+                    <div><strong>Subject:</strong> ${esc(paper.meta.subject || '')}</div>
+                    <div><strong>Test:</strong> ${esc(paper.meta.testName || '')}</div>
                     <div><strong>Time:</strong> ${esc(paper.meta.duration || '')}</div>
                     <div><strong>Max Marks:</strong> ${esc(paper.meta.marks || '')}</div>
+                    <div><strong>Date:</strong> ${esc(paper.meta.date || '')}</div>
                 </div>
                 ${paper.meta.instructions ? `
-                    <div class="print-instructions">
+                    <div class="print-instructions" style="text-align: left; margin-bottom: 16px;">
                         <strong>Instructions:</strong>
                         <div class="print-instructions-text">${esc(paper.meta.instructions)}</div>
                     </div>
@@ -2817,6 +2991,9 @@ function createPaper() {
         id: uid('paper'),
         title: `Question Paper ${state.papers.length + 1}`,
         layout: 'row',
+        logo: '',
+        logoWidth: 120,
+        logoHeight: 120,
         meta: {
             className: '',
             subject: '',
@@ -2824,6 +3001,9 @@ function createPaper() {
             duration: '',
             marks: '',
             instructions: '',
+            institutionName: '',
+            institutionSubtitle: '',
+            date: '',
         },
         sections: [{ id: uid('section'), name: 'Section 1', layout: 'row', questions: [] }],
         tags: [],
@@ -2949,13 +3129,17 @@ function openAddQuestionsModal() {
     
     const modal = document.getElementById('addQuestionsModal');
     const titleEl = document.getElementById('addQuestionsModalTitle');
+    const nameInput = document.getElementById('editSectionNameInput');
     const labelEl = document.getElementById('currentQuestionsCountLabel');
     const countInput = document.getElementById('additionalQuestionsCount');
     const validation = document.getElementById('addQuestionsValidationMessage');
     
     if (!modal || !titleEl || !labelEl || !countInput) return;
     
-    titleEl.textContent = `Add Questions to ${section.name}`;
+    titleEl.textContent = `Edit Section & Add Questions`;
+    if (nameInput) {
+        nameInput.value = section.name;
+    }
     labelEl.textContent = `Current Questions: ${section.questions.length}`;
     countInput.value = '5';
     if (validation) {
@@ -2964,8 +3148,10 @@ function openAddQuestionsModal() {
     }
     
     modal.removeAttribute('hidden');
-    countInput.focus();
-    countInput.select();
+    if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+    }
 }
 
 function initAddQuestionsModal() {
@@ -2974,6 +3160,7 @@ function initAddQuestionsModal() {
     const closeBtn = document.getElementById('closeAddQuestionsModalBtn');
     const cancelBtn = document.getElementById('cancelAddQuestionsModalBtn');
     const confirmBtn = document.getElementById('confirmAddQuestionsModalBtn');
+    const nameInput = document.getElementById('editSectionNameInput');
     const countInput = document.getElementById('additionalQuestionsCount');
     const validation = document.getElementById('addQuestionsValidationMessage');
     
@@ -2987,12 +3174,38 @@ function initAddQuestionsModal() {
     cancelBtn.addEventListener('click', hideModal);
     
     confirmBtn.addEventListener('click', () => {
-        const countVal = countInput.value.trim();
-        const count = parseInt(countVal, 10);
-        
-        if (isNaN(count) || count <= 0 || !/^\d+$/.test(countVal)) {
+        const nameVal = nameInput ? nameInput.value.trim() : '';
+        if (!nameVal) {
             if (validation) {
-                validation.textContent = 'Please enter a valid number of questions.';
+                validation.textContent = 'Section name cannot be empty.';
+                validation.hidden = false;
+            }
+            nameInput.focus();
+            return;
+        }
+        if (nameVal.length > 50) {
+            if (validation) {
+                validation.textContent = 'Section name cannot exceed 50 characters.';
+                validation.hidden = false;
+            }
+            nameInput.focus();
+            return;
+        }
+        if (!/^[a-zA-Z0-9\s.,!?'"()#&@\/\\:-]+$/.test(nameVal)) {
+            if (validation) {
+                validation.textContent = 'Section name contains invalid characters.';
+                validation.hidden = false;
+            }
+            nameInput.focus();
+            return;
+        }
+
+        const countVal = countInput.value.trim();
+        const count = countVal === '' ? 0 : parseInt(countVal, 10);
+        
+        if (isNaN(count) || count < 0 || (countVal !== '' && !/^\d+$/.test(countVal))) {
+            if (validation) {
+                validation.textContent = 'Please enter a valid number of questions (0 or more).';
                 validation.hidden = false;
             }
             countInput.focus();
@@ -3005,32 +3218,39 @@ function initAddQuestionsModal() {
         
         const section = getActiveSection();
         if (section) {
+            section.name = nameVal;
             const startQuestionsIndex = section.questions.length;
-            for (let i = 0; i < count; i++) {
-                const q = newQuestion('', ['', '', '', ''], 0);
-                q.layout = section.layout;
-                section.questions.push(q);
+            if (count > 0) {
+                for (let i = 0; i < count; i++) {
+                    const q = newQuestion('', ['', '', '', ''], 0);
+                    q.layout = section.layout;
+                    section.questions.push(q);
+                }
             }
             hideModal();
             render();
             save();
             
-            setTimeout(() => {
-                const cards = document.querySelectorAll('.question-card');
-                if (cards.length > startQuestionsIndex) {
-                    const firstNew = cards[startQuestionsIndex];
-                    firstNew?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    firstNew?.querySelector('[data-visual-editor]')?.focus();
-                }
-            }, 80);
+            if (count > 0) {
+                setTimeout(() => {
+                    const cards = document.querySelectorAll('.question-card');
+                    if (cards.length > startQuestionsIndex) {
+                        const firstNew = cards[startQuestionsIndex];
+                        firstNew?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        firstNew?.querySelector('[data-visual-editor]')?.focus();
+                    }
+                }, 80);
+            }
         }
     });
     
-    countInput.addEventListener('keydown', (e) => {
+    const handleEnter = (e) => {
         if (e.key === 'Enter') {
             confirmBtn.click();
         }
-    });
+    };
+    if (nameInput) nameInput.addEventListener('keydown', handleEnter);
+    if (countInput) countInput.addEventListener('keydown', handleEnter);
 }
 
 function initDeletePaperModal() {
@@ -3072,6 +3292,128 @@ function initDeletePaperModal() {
         const dropdowns = document.querySelectorAll('.paper-dropdown-menu');
         dropdowns.forEach(menu => menu.setAttribute('hidden', 'true'));
     });
+}
+
+function initWordExportModal() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const modal = document.getElementById('wordExportModal');
+    const closeBtn = document.getElementById('closeWordExportModalBtn');
+    const cancelBtn = document.getElementById('cancelWordExportModalBtn');
+    const confirmBtn = document.getElementById('confirmWordExportModalBtn');
+    
+    if (!modal || !closeBtn || !cancelBtn || !confirmBtn) return;
+    
+    const hideModal = () => {
+        modal.setAttribute('hidden', 'true');
+    };
+    
+    closeBtn.addEventListener('click', hideModal);
+    cancelBtn.addEventListener('click', hideModal);
+    
+    confirmBtn.addEventListener('click', async () => {
+        const activePaper = getActivePaper();
+        if (!activePaper) {
+            hideModal();
+            return;
+        }
+        
+        const selectedOption = document.querySelector('input[name="wordExportOption"]:checked')?.value || 'paperOnly';
+        state.lastWordExportOption = selectedOption;
+        save();
+        
+        toast('Generating Word document...');
+        hideModal();
+        
+        const paper = deepCopy(activePaper);
+        await compileAllMermaidDiagramsInPaper(paper);
+        
+        if (selectedOption === 'paperAndAnswers') {
+            paper.includeAnswerKey = true;
+        }
+        
+        const blob = buildDocxBlob(paper);
+        downloadBlob(blob, `${fileName(paper.title)}.docx`);
+        toast('DOCX exported');
+    });
+}
+
+function initLogoContextMenu() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    
+    const menu = document.getElementById('logoContextMenu');
+    if (!menu) return;
+    
+    document.getElementById('logoContextReplace')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideLogoContextMenu();
+        document.getElementById('logoFileInput')?.click();
+    });
+    
+    document.getElementById('logoContextResize')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideLogoContextMenu();
+        const logoContainer = document.getElementById('logoSetupContainer');
+        if (logoContainer && logoContainer.querySelector('img')) {
+            logoContainer.classList.add('selected');
+            toast('Drag handles to resize logo');
+        }
+    });
+    
+    document.getElementById('logoContextDelete')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideLogoContextMenu();
+        const paper = getActivePaper();
+        if (paper) {
+            paper.logo = '';
+            save();
+            render();
+            toast('Logo deleted');
+        }
+    });
+}
+
+function showLogoContextMenu(x, y) {
+    const menu = document.getElementById('logoContextMenu');
+    if (!menu) return;
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.style.display = 'flex';
+    menu.removeAttribute('hidden');
+}
+
+function hideLogoContextMenu() {
+    const menu = document.getElementById('logoContextMenu');
+    if (!menu) return;
+    menu.setAttribute('hidden', 'true');
+    menu.style.display = 'none';
+}
+
+async function pasteLogoFromClipboard() {
+    try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+            const imageType = item.types.find(type => type.startsWith('image/'));
+            if (imageType) {
+                const blob = await item.getType(imageType);
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const paper = getActivePaper();
+                    if (paper) {
+                        paper.logo = reader.result;
+                        save();
+                        render();
+                        toast('Logo pasted from clipboard');
+                    }
+                };
+                reader.readAsDataURL(blob);
+                return;
+            }
+        }
+        toast('Clipboard does not contain an image');
+    } catch (err) {
+        console.error("Failed to read clipboard:", err);
+        toast('Clipboard does not contain an image');
+    }
 }
 
 function duplicateSection() {
@@ -3151,6 +3493,27 @@ function findQuestion(qid) {
 }
 
 function handlePaste(event) {
+    if (state.isHoveringLogoArea) {
+        const item = [...(event.clipboardData?.items || [])].find(entry => entry.type.startsWith('image/'));
+        if (item) {
+            event.preventDefault();
+            const file = item.getAsFile();
+            const reader = new FileReader();
+            reader.onload = () => {
+                const paper = getActivePaper();
+                if (paper) {
+                    paper.logo = reader.result;
+                    save();
+                    render();
+                    toast('Logo pasted');
+                }
+            };
+            reader.readAsDataURL(file);
+        } else {
+            toast('Clipboard does not contain an image');
+        }
+        return;
+    }
     const target = event.target;
     const codeEditor = target instanceof HTMLTextAreaElement ? target.closest('[data-code-editor]') : null;
     const visualEditor = target instanceof HTMLElement ? target.closest('[data-visual-editor]') : null;
@@ -3473,18 +3836,19 @@ async function compileAllMermaidDiagramsInPaper(paper) {
     }
 }
 
-async function exportWord() {
+function exportWord() {
     const activePaper = getActivePaper();
     if (!activePaper) return;
-    toast('Generating Word document...');
     
-    // Deep copy to prevent mutating active state
-    const paper = deepCopy(activePaper);
-    await compileAllMermaidDiagramsInPaper(paper);
-    
-    const blob = buildDocxBlob(paper);
-    downloadBlob(blob, `${fileName(paper.title)}.docx`);
-    toast('DOCX exported');
+    const modal = document.getElementById('wordExportModal');
+    if (modal) {
+        const lastOption = state.lastWordExportOption || 'paperOnly';
+        const radio = modal.querySelector(`input[name="wordExportOption"][value="${lastOption}"]`);
+        if (radio) {
+            radio.checked = true;
+        }
+        modal.removeAttribute('hidden');
+    }
 }
 
 function buildDocxBlob(paper) {
@@ -3601,14 +3965,112 @@ function docxQuestionParagraphs(questionNumber, markdown, media) {
 
 function buildDocumentXml(paper, media) {
     let body = '';
-    body += docxParagraph([docxTextRun(paper.title || 'Question Paper', { bold: true, size: 30 })], { align: 'center', after: 80 });
-    body += docxParagraph([
-        docxTextRun(`Class: ${paper.meta.className || ''}    Subject: ${paper.meta.subject || ''}    ${paper.meta.testName || ''}    Time: ${paper.meta.duration || ''}    Marks: ${paper.meta.marks || totalMarks(paper)}`, { size: 20 })
-    ], { align: 'center', after: 120 });
-    body += docxParagraph([docxTextRun('Name: ________________________________', { size: 22 })], { after: 120 });
+    
+    const hasLogo = !!paper.logo;
+    const hasInst = !!(paper.meta.institutionName || paper.meta.institutionSubtitle);
+    
+    if (hasLogo || hasInst) {
+        if (hasLogo) {
+            const w = paper.logoWidth || 120;
+            const h = paper.logoHeight || 120;
+            const imgRun = docxImageRun(paper.logo, media, w, h);
+            
+            const instRuns = [];
+            if (paper.meta.institutionName) {
+                instRuns.push(docxParagraph([docxTextRun(paper.meta.institutionName, { bold: true, size: 28 })], { align: 'center', after: 40 }));
+            }
+            if (paper.meta.institutionSubtitle) {
+                instRuns.push(docxParagraph([docxTextRun(paper.meta.institutionSubtitle, { size: 20, italic: true })], { align: 'center', after: 40 }));
+            }
+            
+            body += `<w:tbl>
+                <w:tblPr>
+                    <w:tblW w:w="0" w:type="auto"/>
+                    <w:tblBorders>
+                        <w:top w:val="none"/><w:left w:val="none"/><w:bottom w:val="none"/><w:right w:val="none"/>
+                        <w:insideH w:val="none"/><w:insideV w:val="none"/>
+                    </w:tblBorders>
+                </w:tblPr>
+                <w:tblGrid>
+                    <w:gridCol w:w="2160"/>
+                    <w:gridCol w:w="7200"/>
+                </w:tblGrid>
+                <w:tr>
+                    <w:tc>
+                        <w:tcPr><w:tcW w:w="2160" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>
+                        ${docxParagraph([imgRun], { align: 'left' })}
+                    </w:tc>
+                    <w:tc>
+                        <w:tcPr><w:tcW w:w="7200" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>
+                        ${instRuns.join('')}
+                    </w:tc>
+                </w:tr>
+            </w:tbl>`;
+        } else {
+            const instRuns = [];
+            if (paper.meta.institutionName) {
+                instRuns.push(docxParagraph([docxTextRun(paper.meta.institutionName, { bold: true, size: 28 })], { align: 'center', after: 40 }));
+            }
+            if (paper.meta.institutionSubtitle) {
+                instRuns.push(docxParagraph([docxTextRun(paper.meta.institutionSubtitle, { size: 20, italic: true })], { align: 'center', after: 40 }));
+            }
+            body += instRuns.join('');
+        }
+    }
+    
+    body += docxParagraph([docxTextRun(paper.title || 'Question Paper', { bold: true, size: 30 })], { align: 'center', before: 80, after: 80 });
+
+    const metaRows = [
+        [
+            { label: 'Class', value: paper.meta.className },
+            { label: 'Subject', value: paper.meta.subject },
+            { label: 'Test', value: paper.meta.testName }
+        ],
+        [
+            { label: 'Time', value: paper.meta.duration },
+            { label: 'Marks', value: paper.meta.marks },
+            { label: 'Date', value: paper.meta.date }
+        ]
+    ];
+    
+    body += `<w:tbl>
+        <w:tblPr>
+            <w:tblW w:w="0" w:type="auto"/>
+            <w:tblBorders>
+                <w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                <w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                <w:left w:val="none"/><w:right w:val="none"/>
+                <w:insideH w:val="none"/><w:insideV w:val="none"/>
+            </w:tblBorders>
+        </w:tblPr>
+        <w:tblGrid>
+            <w:gridCol w:w="3120"/>
+            <w:gridCol w:w="3120"/>
+            <w:gridCol w:w="3120"/>
+        </w:tblGrid>`;
+        
+    metaRows.forEach(row => {
+        let rowXml = '';
+        row.forEach(cell => {
+            const cellRuns = [
+                docxTextRun(`${cell.label}: `, { bold: true, size: 20 }),
+                docxTextRun(cell.value || '', { size: 20 })
+            ];
+            rowXml += `<w:tc>
+                <w:tcPr><w:tcW w:w="3120" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>
+                ${docxParagraph(cellRuns, { before: 40, after: 40 })}
+            </w:tc>`;
+        });
+        body += `<w:tr>${rowXml}</w:tr>`;
+    });
+    body += `</w:tbl>`;
+
+    body += docxParagraph([docxTextRun('Name: ________________________________', { size: 22 })], { before: 80, after: 120 });
+    
     if (paper.meta.instructions) {
         body += docxParagraph([docxTextRun('Instructions: ', { bold: true }), ...docxInlineFromMarkdown(paper.meta.instructions, media)], { after: 100 });
     }
+    
     let questionNumber = 0;
     paper.sections.forEach(section => {
         if (!section.questions.length) return;
@@ -3619,6 +4081,22 @@ function buildDocumentXml(paper, media) {
             body += docxOptionsParagraphs(question, media);
         });
     });
+    
+    if (paper.includeAnswerKey) {
+        body += `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+        body += docxParagraph([docxTextRun('ANSWER KEY', { bold: true, size: 28 })], { align: 'center', after: 120 });
+        
+        paper.sections.forEach(section => {
+            if (!section.questions.length) return;
+            body += docxParagraph([docxTextRun(section.name, { bold: true, size: 22 })], { before: 100, after: 50 });
+            
+            section.questions.forEach((question, idx) => {
+                const answerLabel = LABELS[question.correctIndex] || 'A';
+                body += docxParagraph([docxTextRun(`${idx + 1} - ${answerLabel}`, { size: 20 })], { after: 30 });
+            });
+        });
+    }
+
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="${DOCX_NS.w}" xmlns:r="${DOCX_NS.r}" xmlns:wp="${DOCX_NS.wp}" xmlns:a="${DOCX_NS.a}" xmlns:pic="${DOCX_NS.pic}" xmlns:m="${DOCX_NS.m}">
 <w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="360" w:footer="360" w:gutter="0"/></w:sectPr></w:body>
