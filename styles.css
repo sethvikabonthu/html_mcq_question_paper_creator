@@ -2318,39 +2318,89 @@ div[class*="ML__keyboard"] {
     background-color: rgba(59, 130, 246, 0.08);
 }
 
-/* ── Column resize handle ── */
-/* A 6-px-wide invisible strip at the right edge of every cell */
-.editor-table td::after,
-.editor-table th::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: -3px;
-    width: 6px;
-    height: 100%;
-    cursor: col-resize;
-    z-index: 10;
-}
-
-/* Active resize visual feedback */
+/* ── Column resize: invisible hit-zone strip stays via JS cursor on cell ── */
+/* Active resize: right-border highlight */
 .editor-table td.col-resizing,
 .editor-table th.col-resizing {
     background-color: rgba(59, 130, 246, 0.08);
     border-right-color: var(--primary, #3b82f6);
+    border-right-width: 2px;
 }
 
-/* ── Row resize handle ── */
-/* A 6-px strip at the bottom edge of every cell */
-.editor-table td[data-row-resize]::before,
-.editor-table th[data-row-resize]::before {
-    content: '';
+/* Active row-resize row highlight */
+.editor-table tr.row-resizing td,
+.editor-table tr.row-resizing th {
+    border-bottom-color: var(--primary, #3b82f6);
+    border-bottom-width: 2px;
+}
+
+/* ── Live resize guide lines ── */
+/* These are fixed-position divs injected by JS during drag */
+#tblColGuide {
+    position: fixed;
+    top: 0;
+    width: 2px;
+    background: var(--primary, #3b82f6);
+    opacity: 0.75;
+    pointer-events: none;
+    z-index: 9999;
+    display: none;
+}
+#tblRowGuide {
+    position: fixed;
+    left: 0;
+    height: 2px;
+    background: var(--primary, #3b82f6);
+    opacity: 0.75;
+    pointer-events: none;
+    z-index: 9999;
+    display: none;
+}
+
+/* ── Table selection overlay with corner handles ── */
+/* A zero-size, absolutely-positioned wrapper tracked over the focused table */
+#tblResizeOverlay {
+    position: fixed;
+    pointer-events: none;
+    z-index: 8900;
+    display: none;
+    border: 2px solid var(--primary, #3b82f6);
+    border-radius: 2px;
+}
+#tblResizeOverlay .tbl-corner-handle {
     position: absolute;
-    bottom: -3px;
+    width: 10px;
+    height: 10px;
+    background: #ffffff;
+    border: 2px solid var(--primary, #3b82f6);
+    border-radius: 2px;
+    pointer-events: all;
+    cursor: nwse-resize;
+    z-index: 8901;
+}
+#tblResizeOverlay .tbl-corner-handle.tl { top: -5px;  left: -5px;  cursor: nwse-resize; }
+#tblResizeOverlay .tbl-corner-handle.tr { top: -5px;  right: -5px; cursor: nesw-resize; }
+#tblResizeOverlay .tbl-corner-handle.bl { bottom: -5px; left: -5px;  cursor: nesw-resize; }
+#tblResizeOverlay .tbl-corner-handle.br { bottom: -5px; right: -5px; cursor: nwse-resize; }
+
+/* Right-edge handle for pure-width resizing (most-used) */
+#tblResizeOverlay .tbl-edge-handle {
+    position: absolute;
+    pointer-events: all;
+}
+#tblResizeOverlay .tbl-edge-handle.right {
+    top: 0;
+    right: -5px;
+    width: 10px;
+    height: 100%;
+    cursor: ew-resize;
+}
+#tblResizeOverlay .tbl-edge-handle.bottom {
+    bottom: -5px;
     left: 0;
     width: 100%;
-    height: 6px;
-    cursor: row-resize;
-    z-index: 10;
+    height: 10px;
+    cursor: ns-resize;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2417,6 +2467,45 @@ div[class*="ML__keyboard"] {
     flex-shrink: 0;
 }
 
+/* ── Layout dropdown ── */
+.tbl-tool-dropdown {
+    position: relative;
+    display: inline-flex;
+}
+.tbl-tool-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--card, #ffffff);
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+    padding: 4px;
+    z-index: 9100;
+    min-width: 180px;
+    white-space: nowrap;
+    animation: toolbarFadeIn 0.12s ease;
+}
+.tbl-tool-dropdown-item {
+    display: block;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text, #334155);
+    font-size: 12.5px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.tbl-tool-dropdown-item:hover {
+    background: var(--bg, #f8fafc);
+    color: var(--primary, #3b82f6);
+}
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    PRINT & EXPORT
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -2433,7 +2522,7 @@ div[class*="ML__keyboard"] {
     background-color: #f1f5f9 !important;
 }
 
-/* Hide resize handles in print */
+/* Hide resize UI in print */
 @media print {
     .editor-table td::after,
     .editor-table th::after,
@@ -2444,7 +2533,10 @@ div[class*="ML__keyboard"] {
     .editor-table.tbl-focused {
         outline: none !important;
     }
-    #tableFloatingToolbar {
+    #tableFloatingToolbar,
+    #tblResizeOverlay,
+    #tblColGuide,
+    #tblRowGuide {
         display: none !important;
     }
 }

@@ -520,6 +520,18 @@
         <button type="button" class="context-menu-item" id="tableContextSplit">🥞 Split Cells</button>
     </div>
 
+    <!-- Table resize UI: guide lines (column, row) + selection overlay with handles -->
+    <div id="tblColGuide"></div>
+    <div id="tblRowGuide"></div>
+    <div id="tblResizeOverlay">
+        <div class="tbl-corner-handle tl" data-handle="tl"></div>
+        <div class="tbl-corner-handle tr" data-handle="tr"></div>
+        <div class="tbl-corner-handle bl" data-handle="bl"></div>
+        <div class="tbl-corner-handle br" data-handle="br"></div>
+        <div class="tbl-edge-handle right"  data-handle="right"></div>
+        <div class="tbl-edge-handle bottom" data-handle="bottom"></div>
+    </div>
+
     <div id="printPaperContainer" class="print-paper-container"></div>
     <input type="file" id="fileInput" accept="application/json,.json" hidden />
     <!-- Floating Table Toolbar – shown whenever cursor is inside an editor-table -->
@@ -535,7 +547,18 @@
         <button type="button" class="tbl-tool-btn" id="tblToolMerge" title="Merge Cells">⊞ Merge</button>
         <button type="button" class="tbl-tool-btn" id="tblToolSplit" title="Split Cells">⊟ Split</button>
         <span class="tbl-tool-sep"></span>
-        <button type="button" class="tbl-tool-btn" id="tblToolEqualCols" title="Equal Column Widths">≡ Cols</button>
+        <!-- Table Properties / Auto-fit dropdown -->
+        <div class="tbl-tool-dropdown" id="tblToolPropsWrap">
+            <button type="button" class="tbl-tool-btn" id="tblToolProps" title="Table Properties">⚙ Layout ▾</button>
+            <div class="tbl-tool-dropdown-menu" id="tblToolPropsMenu" hidden>
+                <button type="button" class="tbl-tool-dropdown-item" data-autofit="window">Auto Fit to Window</button>
+                <button type="button" class="tbl-tool-dropdown-item" data-autofit="content">Auto Fit to Content</button>
+                <button type="button" class="tbl-tool-dropdown-item" data-autofit="equal">Equal Column Width</button>
+                <button type="button" class="tbl-tool-dropdown-item" data-autofit="fixed">Fixed Width (lock)</button>
+                <button type="button" class="tbl-tool-dropdown-item" data-autofit="equalRowHeight">Equal Row Height</button>
+            </div>
+        </div>
+        <span class="tbl-tool-sep"></span>
         <button type="button" class="tbl-tool-btn tbl-tool-danger" id="tblToolDeleteTable" title="Delete Table">🗑 Table</button>
     </div>
 

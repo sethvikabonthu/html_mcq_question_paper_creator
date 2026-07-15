@@ -135,6 +135,7 @@ initWordExportModal();
 initLogoContextMenu();
 initAdvancedEditorModal();
 initTableContextMenu();
+initTableFloatingToolbar();
 render();
 
 function load() {
@@ -2043,17 +2044,18 @@ document.addEventListener('click', e => {
 document.addEventListener('contextmenu', e => {
     const tableCell = e.target.closest('td, th');
     if (tableCell) {
+        // Native editor-table cells are handled by the capture-phase listener
+        // lower in this file. Skip them here to avoid double-firing.
+        if (tableCell.closest('table.editor-table')) return;
+
         e.preventDefault();
         e.stopPropagation();
-        
         activeTableCell = tableCell;
-        
         const token = tableCell.closest('.table-token');
         if (token) {
             document.querySelectorAll('.table-token.selected').forEach(t => t.classList.remove('selected'));
             token.classList.add('selected');
         }
-        
         showTableContextMenu(e.clientX, e.clientY);
         return;
     }
@@ -2201,27 +2203,11 @@ document.addEventListener('keydown', e => {
     }
 });
 
-// Centralized document-level mousedown listener (handles both context menu actions and drag resizing)
+// Note: editor-table column/row resize mousedown is handled by the
+// complete resize engine further below (_colResizeCell / _rowResizeRow).
+
+// This mousedown handler handles mermaid diagram resize handles and context menu buttons.
 document.addEventListener('mousedown', e => {
-    const cell = e.target.closest('td, th');
-    if (cell) {
-        if (cell.style.cursor === 'col-resize') {
-            e.preventDefault();
-            e.stopPropagation();
-            colResizeStartCell = cell;
-            colResizeStartX = e.clientX;
-            colResizeStartWidth = cell.offsetWidth;
-            return;
-        }
-        if (cell.style.cursor === 'row-resize') {
-            e.preventDefault();
-            e.stopPropagation();
-            rowResizeStartCell = cell;
-            rowResizeStartY = e.clientY;
-            rowResizeStartHeight = cell.offsetHeight;
-            return;
-        }
-    }
     // 1. Handle Context Menu "Edit Diagram" Button Click
     const editBtn = e.target.closest('#contextEditDiagram');
     if (editBtn) {
@@ -2942,6 +2928,10 @@ function nodeToMarkdown(node) {
             cell.classList.remove('cell-selected', 'col-resizing');
             cell.removeAttribute('contenteditable');
             cell.style.cursor = '';
+        });
+        clone.querySelectorAll('tr').forEach(tr => {
+            tr.classList.remove('row-resizing');
+            tr.style.cursor = '';
         });
         const liveHtml = clone.outerHTML;
         const base64Html = btoa(unescape(encodeURIComponent(liveHtml)));
@@ -3842,9 +3832,15 @@ function initAdvancedEditorModal() {
                 });
                 insertHtmlIntoVisualEditor(visualEditorEl, tableEl.outerHTML, savedRange);
                 updateFieldFromEditor(editorId, markdownFromVisual(visualEditorEl));
-                // Focus first cell for immediate editing
-                const inserted = visualEditorEl.querySelector('table.editor-table td, table.editor-table th');
-                if (inserted) inserted.focus();
+                // Focus first cell and show resize overlay immediately
+                setTimeout(() => {
+                    const inserted = visualEditorEl.querySelector('table.editor-table');
+                    if (inserted) {
+                        ensureColgroup(inserted);
+                        showTableOverlay(inserted);
+                        inserted.querySelector('td, th')?.focus();
+                    }
+                }, 20);
             }
         } else if (savedSelectionStart !== null) {
             // Code-editor / textarea path
@@ -3887,65 +3883,189 @@ let activeTableCell = null;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // NATIVE TABLE RESIZE ENGINE
-// Column resize: drag the right edge pseudo-element (::after) of any td/th.
-// Row resize   : drag the bottom edge of any tr.
-// Both are handled via global mousedown → mousemove → mouseup.
+// Column resize: drag the right edge pseudo-element (::aft// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// INTERACTIVE TABLE RESIZE ENGINE
+// Handles: column drag, row drag, whole-table corner/edge drag
+// All widths/heights are stored directly on col[style] and tr[style] so they
+// survive serialization to [table:base64] and restore perfectly on reload.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-let _colResizeCell = null;   // the <td>/<th> whose right border we’re dragging
-let _colResizeX    = 0;      // clientX at drag start
-let _colResizeW    = 0;      // cell width at drag start
-let _rowResizeRow  = null;   // the <tr> whose bottom we’re dragging
-let _rowResizeY    = 0;      // clientY at drag start
-let _rowResizeH    = 0;      // row height at drag start
-const COL_MIN_W    = 40;     // px
-const ROW_MIN_H    = 24;     // px
+const TBL_COL_MIN = 40;   // px minimum column width
+const TBL_ROW_MIN = 30;   // px minimum row height
+const TBL_COL_ZONE = 8;   // px hit-zone at right edge of cell for col-resize
+const TBL_ROW_ZONE = 8;   // px hit-zone at bottom edge of row for row-resize
 
-// Helper: is the pointer within the 8px right-edge resize zone of a cell?
+// Active drag state
+let _drag = null;
+/*
+  _drag = {
+    type: 'col' | 'row' | 'table',
+    // col:
+    cell, colIndex, startX, startW, tableEl, colEls,
+    // row:
+    rowEl, startY, startH,
+    // table:
+    tableEl, handle, startX, startY, startW, startH, origColWidths
+  }
+*/
+
+// UI elements (resolved once)
+let _colGuide   = null;
+let _rowGuide   = null;
+let _tblOverlay = null;
+let _overlayTarget = null; // the table currently tracked by overlay
+
+function _getResizeEls() {
+    _colGuide   = _colGuide   || document.getElementById('tblColGuide');
+    _rowGuide   = _rowGuide   || document.getElementById('tblRowGuide');
+    _tblOverlay = _tblOverlay || document.getElementById('tblResizeOverlay');
+}
+
+// ── COLGROUP management ───────────────────────────────────────────────────────
+// Ensures every editor-table has a <colgroup> with one <col> per column.
+// Called after insert, after add/delete column, and on first focus.
+function ensureColgroup(table) {
+    if (!table) return;
+    const cols = table.rows[0] ? table.rows[0].cells.length : 0;
+    if (!cols) return;
+
+    let cg = table.querySelector(':scope > colgroup');
+    if (!cg) {
+        cg = document.createElement('colgroup');
+        table.insertBefore(cg, table.firstChild);
+    }
+
+    // Sync count
+    while (cg.children.length < cols) {
+        const col = document.createElement('col');
+        cg.appendChild(col);
+    }
+    while (cg.children.length > cols) {
+        cg.removeChild(cg.lastChild);
+    }
+
+    // If col elements have no width set, distribute evenly from actual cell widths
+    const colEls = Array.from(cg.children);
+    const hasWidths = colEls.some(c => c.style.width);
+    if (!hasWidths) {
+        // Read current widths from the first row's cells
+        const firstRow = table.rows[0];
+        colEls.forEach((col, i) => {
+            const cell = firstRow?.cells[i];
+            if (cell) {
+                col.style.width = cell.offsetWidth + 'px';
+            }
+        });
+    }
+}
+
+// Read column widths from colgroup
+function getColWidths(table) {
+    const cg = table.querySelector(':scope > colgroup');
+    if (!cg) return [];
+    return Array.from(cg.children).map(c => parseFloat(c.style.width) || 0);
+}
+
+// Write column widths to colgroup
+function setColWidths(table, widths) {
+    const cg = table.querySelector(':scope > colgroup');
+    if (!cg) return;
+    Array.from(cg.children).forEach((col, i) => {
+        if (widths[i] != null) col.style.width = widths[i] + 'px';
+    });
+}
+
+// ── Overlay management ────────────────────────────────────────────────────────
+function showTableOverlay(table) {
+    _getResizeEls();
+    if (!_tblOverlay || !table) return;
+    _overlayTarget = table;
+    _updateTableOverlay();
+    _tblOverlay.style.display = 'block';
+}
+
+function hideTableOverlay() {
+    _getResizeEls();
+    if (_tblOverlay) _tblOverlay.style.display = 'none';
+    _overlayTarget = null;
+}
+
+function _updateTableOverlay() {
+    if (!_tblOverlay || !_overlayTarget || !document.contains(_overlayTarget)) {
+        hideTableOverlay();
+        return;
+    }
+    const r = _overlayTarget.getBoundingClientRect();
+    _tblOverlay.style.left   = r.left   + 'px';
+    _tblOverlay.style.top    = r.top    + 'px';
+    _tblOverlay.style.width  = r.width  + 'px';
+    _tblOverlay.style.height = r.height + 'px';
+}
+
+// Keep overlay in sync when page scrolls/resizes
+(function() {
+    function track() {
+        if (_overlayTarget) requestAnimationFrame(_updateTableOverlay);
+    }
+    window.addEventListener('scroll', track, { passive: true, capture: true });
+    window.addEventListener('resize', track, { passive: true });
+})();
+
+// ── Guide line helpers ────────────────────────────────────────────────────────
+function _showColGuide(x) {
+    _getResizeEls();
+    if (!_colGuide) return;
+    _colGuide.style.left   = x + 'px';
+    _colGuide.style.top    = '0';
+    _colGuide.style.height = '100vh';
+    _colGuide.style.display = 'block';
+}
+function _hideColGuide() {
+    _getResizeEls();
+    if (_colGuide) _colGuide.style.display = 'none';
+}
+function _showRowGuide(y) {
+    _getResizeEls();
+    if (!_rowGuide) return;
+    _rowGuide.style.top   = y + 'px';
+    _rowGuide.style.left  = '0';
+    _rowGuide.style.width = '100vw';
+    _rowGuide.style.display = 'block';
+}
+function _hideRowGuide() {
+    _getResizeEls();
+    if (_rowGuide) _rowGuide.style.display = 'none';
+}
+
+// ── Hit-zone detection ────────────────────────────────────────────────────────
 function _isColResizeZone(cell, clientX) {
-    const rect = cell.getBoundingClientRect();
-    return clientX >= rect.right - 8 && clientX <= rect.right + 4;
+    const r = cell.getBoundingClientRect();
+    return clientX >= r.right - TBL_COL_ZONE && clientX <= r.right + 4;
 }
-
-// Helper: is the pointer within the 8px bottom-edge resize zone of a row?
 function _isRowResizeZone(tr, clientY) {
-    const rect = tr.getBoundingClientRect();
-    return clientY >= rect.bottom - 8 && clientY <= rect.bottom + 4;
+    const r = tr.getBoundingClientRect();
+    return clientY >= r.bottom - TBL_ROW_ZONE && clientY <= r.bottom + 4;
 }
 
+// ── mousemove: cursor hints + live resize ─────────────────────────────────────
 document.addEventListener('mousemove', e => {
-    // During a column drag
-    if (_colResizeCell) {
+    if (_drag) {
         e.preventDefault();
-        const dx = e.clientX - _colResizeX;
-        const newW = Math.max(COL_MIN_W, _colResizeW + dx);
-        _colResizeCell.style.width = newW + 'px';
-        // Ensure the table uses fixed layout so widths are respected
-        const tbl = _colResizeCell.closest('table');
-        if (tbl) tbl.style.tableLayout = 'fixed';
+        _onDragMove(e);
         return;
     }
-    // During a row drag
-    if (_rowResizeRow) {
-        e.preventDefault();
-        const dy = e.clientY - _rowResizeY;
-        const newH = Math.max(ROW_MIN_H, _rowResizeH + dy);
-        _rowResizeRow.style.height = newH + 'px';
-        // Also fix each cell height so it doesn’t collapse
-        Array.from(_rowResizeRow.cells).forEach(c => { c.style.height = newH + 'px'; });
-        return;
-    }
-    // Update cursor to col-resize / row-resize when hovering near edges
+    // Cursor hints (no button pressed)
+    if (e.buttons) return;
     const cell = e.target.closest && e.target.closest('td, th');
-    if (cell && cell.closest('table.editor-table') && !e.buttons) {
+    if (cell && cell.closest('table.editor-table')) {
         if (_isColResizeZone(cell, e.clientX)) {
             cell.style.cursor = 'col-resize';
-            return;
+        } else {
+            cell.style.cursor = '';
         }
-        cell.style.cursor = '';
     }
     const tr = e.target.closest && e.target.closest('tr');
-    if (tr && tr.closest('table.editor-table') && !e.buttons) {
+    if (tr && tr.closest('table.editor-table')) {
         if (_isRowResizeZone(tr, e.clientY)) {
             tr.style.cursor = 'row-resize';
         } else {
@@ -3954,44 +4074,167 @@ document.addEventListener('mousemove', e => {
     }
 });
 
+function _onDragMove(e) {
+    if (_drag.type === 'col') {
+        const dx   = e.clientX - _drag.startX;
+        const newW = Math.max(TBL_COL_MIN, _drag.startW + dx);
+        // Apply to colgroup col element for reliable fixed layout
+        if (_drag.colEls[_drag.colIndex]) {
+            _drag.colEls[_drag.colIndex].style.width = newW + 'px';
+        }
+        // Also apply to the dragged cell directly for instant visual feedback
+        _drag.cell.style.width = newW + 'px';
+        // Move guide line
+        const r = _drag.cell.getBoundingClientRect();
+        _showColGuide(r.right);
+        // Highlight
+        _drag.cell.classList.add('col-resizing');
+        // Update overlay
+        if (_overlayTarget) _updateTableOverlay();
+    } else if (_drag.type === 'row') {
+        const dy   = e.clientY - _drag.startY;
+        const newH = Math.max(TBL_ROW_MIN, _drag.startH + dy);
+        _drag.rowEl.style.height = newH + 'px';
+        // Fix each cell height so content doesn't collapse the row
+        Array.from(_drag.rowEl.cells).forEach(c => { c.style.height = newH + 'px'; });
+        const r = _drag.rowEl.getBoundingClientRect();
+        _showRowGuide(r.bottom);
+        _drag.rowEl.classList.add('row-resizing');
+        if (_overlayTarget) _updateTableOverlay();
+    } else if (_drag.type === 'table') {
+        _onTableDragMove(e);
+    }
+}
+
+function _onTableDragMove(e) {
+    const handle = _drag.handle;
+    const table  = _drag.tableEl;
+    const editorDiv = table.closest('[data-visual-editor]');
+    const editorRect = editorDiv ? editorDiv.getBoundingClientRect() : null;
+    const maxW = editorRect ? editorRect.width - 4 : 2000;
+
+    let newW = _drag.startW;
+    let newH = _drag.startH;
+
+    if (handle === 'right') {
+        newW = Math.max(TBL_COL_MIN * 2, Math.min(maxW, _drag.startW + (e.clientX - _drag.startX)));
+    } else if (handle === 'bottom') {
+        newH = Math.max(TBL_ROW_MIN * (_drag.tableEl.rows.length || 1),
+                        _drag.startH + (e.clientY - _drag.startY));
+    } else if (handle === 'br') {
+        newW = Math.max(TBL_COL_MIN * 2, Math.min(maxW, _drag.startW + (e.clientX - _drag.startX)));
+        newH = Math.max(TBL_ROW_MIN,     _drag.startH + (e.clientY - _drag.startY));
+    } else if (handle === 'bl') {
+        newW = Math.max(TBL_COL_MIN * 2, Math.min(maxW, _drag.startW - (e.clientX - _drag.startX)));
+        newH = Math.max(TBL_ROW_MIN,     _drag.startH + (e.clientY - _drag.startY));
+    } else if (handle === 'tr') {
+        newW = Math.max(TBL_COL_MIN * 2, Math.min(maxW, _drag.startW + (e.clientX - _drag.startX)));
+    } else if (handle === 'tl') {
+        newW = Math.max(TBL_COL_MIN * 2, Math.min(maxW, _drag.startW - (e.clientX - _drag.startX)));
+    }
+
+    // Set table width
+    table.style.width = newW + 'px';
+
+    // Scale all columns proportionally
+    if (_drag.origColWidths.length > 0) {
+        const ratio = newW / _drag.startW;
+        const newWidths = _drag.origColWidths.map(w => Math.max(TBL_COL_MIN, Math.round(w * ratio)));
+        setColWidths(table, newWidths);
+    }
+
+    // If height changed, distribute equally across rows
+    if (newH !== _drag.startH && table.rows.length > 0) {
+        const rowH = Math.floor(newH / table.rows.length);
+        Array.from(table.rows).forEach(tr => {
+            tr.style.height = rowH + 'px';
+            Array.from(tr.cells).forEach(c => { c.style.height = rowH + 'px'; });
+        });
+    }
+
+    _updateTableOverlay();
+}
+
+// ── mousedown: start drag ─────────────────────────────────────────────────────
 document.addEventListener('mousedown', e => {
-    // —— Column resize start ——
+    // Handle drag: corner or edge of table overlay
+    const handle = e.target.dataset && e.target.dataset.handle;
+    if (handle && _overlayTarget) {
+        e.preventDefault();
+        e.stopPropagation();
+        ensureColgroup(_overlayTarget);
+        _drag = {
+            type: 'table',
+            tableEl: _overlayTarget,
+            handle,
+            startX: e.clientX,
+            startY: e.clientY,
+            startW: _overlayTarget.offsetWidth,
+            startH: _overlayTarget.offsetHeight,
+            origColWidths: getColWidths(_overlayTarget),
+        };
+        return;
+    }
+
+    // Column resize: right-edge zone of a cell
     const cell = e.target.closest && e.target.closest('td, th');
     if (cell && cell.closest('table.editor-table')) {
         if (_isColResizeZone(cell, e.clientX)) {
             e.preventDefault();
-            _colResizeCell = cell;
-            _colResizeX    = e.clientX;
-            _colResizeW    = cell.offsetWidth;
-            cell.classList.add('col-resizing');
+            e.stopPropagation();
+            const table = cell.closest('table');
+            ensureColgroup(table);
+            const colEls    = Array.from(table.querySelector('colgroup')?.children || []);
+            const colIndex  = cell.cellIndex;
+            _drag = {
+                type: 'col',
+                cell,
+                colIndex,
+                startX: e.clientX,
+                startW: cell.offsetWidth,
+                tableEl: table,
+                colEls,
+            };
             return;
         }
     }
-    // —— Row resize start ——
+
+    // Row resize: bottom-edge zone of a row
     const tr = e.target.closest && e.target.closest('tr');
     if (tr && tr.closest('table.editor-table')) {
         if (_isRowResizeZone(tr, e.clientY)) {
             e.preventDefault();
-            _rowResizeRow = tr;
-            _rowResizeY   = e.clientY;
-            _rowResizeH   = tr.offsetHeight;
+            e.stopPropagation();
+            _drag = {
+                type: 'row',
+                rowEl: tr,
+                startY: e.clientY,
+                startH: tr.offsetHeight,
+            };
             return;
         }
     }
 }, true);
 
-document.addEventListener('mouseup', e => {
-    if (_colResizeCell) {
-        _colResizeCell.classList.remove('col-resizing');
-        const tbl = _colResizeCell.closest('table.editor-table');
+// ── mouseup: commit and save ──────────────────────────────────────────────────
+document.addEventListener('mouseup', () => {
+    if (!_drag) return;
+    _hideColGuide();
+    _hideRowGuide();
+
+    if (_drag.type === 'col') {
+        _drag.cell.classList.remove('col-resizing');
+        syncTableToState(_drag.tableEl);
+    } else if (_drag.type === 'row') {
+        _drag.rowEl.classList.remove('row-resizing');
+        const tbl = _drag.rowEl.closest('table.editor-table');
         if (tbl) syncTableToState(tbl);
-        _colResizeCell = null;
+    } else if (_drag.type === 'table') {
+        syncTableToState(_drag.tableEl);
     }
-    if (_rowResizeRow) {
-        const tbl = _rowResizeRow.closest('table.editor-table');
-        if (tbl) syncTableToState(tbl);
-        _rowResizeRow = null;
-    }
+
+    _drag = null;
+    _updateTableOverlay();
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4008,13 +4251,20 @@ document.addEventListener('contextmenu', e => {
 
 document.addEventListener('click', e => {
     if (!e.target.closest('#tableContextMenu')) hideTableContextMenu();
-    if (!e.target.closest('#tableFloatingToolbar') && !e.target.closest('table.editor-table')) {
+    if (!e.target.closest('#tableFloatingToolbar') && !e.target.closest('table.editor-table')
+        && !e.target.closest('#tblResizeOverlay')) {
         hideTableFloatingToolbar();
     }
-    // Focused table styling
+    // Focused table styling + overlay
     const tbl = e.target.closest && e.target.closest('table.editor-table');
     document.querySelectorAll('table.editor-table').forEach(t => t.classList.remove('tbl-focused'));
-    if (tbl) tbl.classList.add('tbl-focused');
+    if (tbl) {
+        tbl.classList.add('tbl-focused');
+        ensureColgroup(tbl);
+        showTableOverlay(tbl);
+    } else if (!e.target.closest('#tblResizeOverlay')) {
+        hideTableOverlay();
+    }
 });
 
 document.addEventListener('keydown', e => {
@@ -4191,15 +4441,84 @@ function tableEqualCols() {
     if (!table) return;
     const cols = table.rows[0]?.cells.length || 0;
     if (!cols) return;
-    const w = Math.floor(100 / cols);
-    Array.from(table.querySelectorAll('th, td')).forEach(c => { c.style.width = w + '%'; });
+    ensureColgroup(table);
+    const totalW = table.offsetWidth || 600;
+    const colW   = Math.floor(totalW / cols);
+    const colEls = Array.from(table.querySelector('colgroup')?.children || []);
+    colEls.forEach(col => { col.style.width = colW + 'px'; });
     table.style.tableLayout = 'fixed';
+    _updateTableOverlay();
+    syncTableToState(table);
+}
+
+// tableAutoFit: three layout modes
+function tableAutoFit(mode) {
+    if (!activeTableCell) return;
+    const table = activeTableCell.closest('table.editor-table');
+    if (!table) return;
+    ensureColgroup(table);
+    const colEls = Array.from(table.querySelector('colgroup')?.children || []);
+
+    if (mode === 'window') {
+        // Full editor width, equal columns
+        const editorW = table.closest('[data-visual-editor]')?.offsetWidth || 600;
+        table.style.width = '100%';
+        const colW = Math.floor(editorW / (colEls.length || 1));
+        colEls.forEach(col => { col.style.width = colW + 'px'; });
+        table.style.tableLayout = 'fixed';
+
+    } else if (mode === 'content') {
+        // Let browser size to content
+        table.style.width = '';
+        table.style.tableLayout = 'auto';
+        colEls.forEach(col => { col.style.width = ''; });
+        // Reread widths after auto layout
+        requestAnimationFrame(() => {
+            const firstRow = table.rows[0];
+            if (firstRow) {
+                colEls.forEach((col, i) => {
+                    col.style.width = (firstRow.cells[i]?.offsetWidth || 80) + 'px';
+                });
+                table.style.tableLayout = 'fixed';
+            }
+            _updateTableOverlay();
+            syncTableToState(table);
+        });
+        return;
+
+    } else if (mode === 'equal') {
+        tableEqualCols();
+        return;
+
+    } else if (mode === 'fixed') {
+        // Keep current widths but lock to fixed layout
+        if (!colEls.some(c => c.style.width)) {
+            const firstRow = table.rows[0];
+            if (firstRow) {
+                colEls.forEach((col, i) => {
+                    col.style.width = (firstRow.cells[i]?.offsetWidth || 80) + 'px';
+                });
+            }
+        }
+        table.style.tableLayout = 'fixed';
+
+    } else if (mode === 'equalRowHeight') {
+        if (!table.rows.length) return;
+        const totalH = table.offsetHeight;
+        const rowH   = Math.floor(totalH / table.rows.length);
+        Array.from(table.rows).forEach(tr => {
+            tr.style.height = rowH + 'px';
+            Array.from(tr.cells).forEach(c => { c.style.height = rowH + 'px'; });
+        });
+    }
+
+    _updateTableOverlay();
     syncTableToState(table);
 }
 
 function initTableContextMenu() {
     if (typeof document === 'undefined' || !document.getElementById) return;
-    
+
     document.getElementById('tableContextInsertRowAbove')?.addEventListener('click', (e) => {
         e.stopPropagation();
         hideTableContextMenu();
@@ -4245,6 +4564,132 @@ function initTableContextMenu() {
         hideTableContextMenu();
         tableSplitCells();
     });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FLOATING TABLE TOOLBAR
+// Appears above the active editor-table whenever the cursor is inside a cell.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let _toolbarTargetTable = null;
+
+function showTableFloatingToolbar(table) {
+    const toolbar = document.getElementById('tableFloatingToolbar');
+    if (!toolbar || !table) return;
+    _toolbarTargetTable = table;
+    toolbar.removeAttribute('hidden');
+    positionTableFloatingToolbar(table, toolbar);
+}
+
+function hideTableFloatingToolbar() {
+    const toolbar = document.getElementById('tableFloatingToolbar');
+    if (toolbar) toolbar.setAttribute('hidden', 'true');
+    _toolbarTargetTable = null;
+}
+
+function positionTableFloatingToolbar(table, toolbar) {
+    if (!table || !toolbar) return;
+    const rect = table.getBoundingClientRect();
+    const tbH = toolbar.offsetHeight || 40;
+    const GAP = 6;
+    let top = rect.top - tbH - GAP;
+    // If not enough room above, show below instead
+    if (top < 8) top = rect.bottom + GAP;
+    // Center horizontally over table, clamped to viewport
+    let left = rect.left + (rect.width / 2) - (toolbar.offsetWidth / 2);
+    left = Math.max(8, Math.min(left, window.innerWidth - toolbar.offsetWidth - 8));
+    toolbar.style.top  = top  + 'px';
+    toolbar.style.left = left + 'px';
+}
+
+function initTableFloatingToolbar() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    const toolbar = document.getElementById('tableFloatingToolbar');
+    if (!toolbar) return;
+
+    // Wire all toolbar buttons
+    const wire = (id, fn) => {
+        document.getElementById(id)?.addEventListener('mousedown', e => {
+            e.preventDefault(); // prevent losing focus / selection
+            e.stopPropagation();
+        });
+        document.getElementById(id)?.addEventListener('click', e => {
+            e.stopPropagation();
+            fn();
+            // Re-position after DOM change
+            if (_toolbarTargetTable && document.contains(_toolbarTargetTable)) {
+                positionTableFloatingToolbar(_toolbarTargetTable, toolbar);
+            } else {
+                hideTableFloatingToolbar();
+            }
+        });
+    };
+
+    wire('tblToolRowAbove',    tableInsertRowAbove);
+    wire('tblToolRowBelow',    tableInsertRowBelow);
+    wire('tblToolDelRow',      tableDeleteRow);
+    wire('tblToolColLeft',     tableInsertColLeft);
+    wire('tblToolColRight',    tableInsertColRight);
+    wire('tblToolDelCol',      tableDeleteCol);
+    wire('tblToolMerge',       tableMergeCells);
+    wire('tblToolSplit',       tableSplitCells);
+    wire('tblToolDeleteTable', tableDeleteTable);
+
+    // Layout dropdown toggle
+    const propsBtn  = document.getElementById('tblToolProps');
+    const propsMenu = document.getElementById('tblToolPropsMenu');
+    if (propsBtn && propsMenu) {
+        propsBtn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); });
+        propsBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            const hidden = propsMenu.hasAttribute('hidden');
+            if (hidden) propsMenu.removeAttribute('hidden');
+            else        propsMenu.setAttribute('hidden', 'true');
+        });
+        propsMenu.querySelectorAll('[data-autofit]').forEach(item => {
+            item.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); });
+            item.addEventListener('click', e => {
+                e.stopPropagation();
+                propsMenu.setAttribute('hidden', 'true');
+                tableAutoFit(item.dataset.autofit);
+                if (_toolbarTargetTable && document.contains(_toolbarTargetTable)) {
+                    positionTableFloatingToolbar(_toolbarTargetTable, toolbar);
+                }
+            });
+        });
+        // Close dropdown when clicking outside
+        document.addEventListener('click', e => {
+            if (!e.target.closest('#tblToolPropsWrap')) {
+                propsMenu.setAttribute('hidden', 'true');
+            }
+        });
+    }
+
+    // Show toolbar when cursor enters any editor-table cell
+    document.addEventListener('focusin', e => {
+        const cell = e.target.closest && e.target.closest('td, th');
+        const table = cell?.closest('table.editor-table');
+        if (table) {
+            activeTableCell = cell;
+            showTableFloatingToolbar(table);
+            ensureColgroup(table);
+            showTableOverlay(table);
+        } else if (!e.target.closest('#tableFloatingToolbar') && !e.target.closest('#tblResizeOverlay')) {
+            hideTableFloatingToolbar();
+        }
+    });
+
+    // Re-position when scrolling or resizing so toolbar tracks the table
+    window.addEventListener('scroll', () => {
+        if (_toolbarTargetTable && document.contains(_toolbarTargetTable)) {
+            positionTableFloatingToolbar(_toolbarTargetTable, toolbar);
+        }
+    }, { passive: true });
+    window.addEventListener('resize', () => {
+        if (_toolbarTargetTable && document.contains(_toolbarTargetTable)) {
+            positionTableFloatingToolbar(_toolbarTargetTable, toolbar);
+        }
+    }, { passive: true });
 }
 
 function duplicateSection() {
@@ -4743,65 +5188,111 @@ function docxTableFromBase64Html(base64Html) {
         const doc = parser.parseFromString(html, 'text/html');
         const tableEl = doc.querySelector('table');
         if (!tableEl) return '';
-        
+
+        // DOCX uses twips (15 twips per CSS pixel). Keep the editor's current dimensions instead of normalizing every table to a default width.
+        const pxToDxa = value => Math.max(1, Math.round((parseFloat(value) || 0) * 15));
+        const DOCX_TOTAL_W = 9000;
+        const colEls = Array.from(doc.querySelectorAll('colgroup col'));
+        let colWidthsDxa = [];  // widths in dxa (twips)
+
+        if (colEls.length > 0) {
+            // The colgroup is the resize engine's persisted source of truth.
+            const pxWidths = colEls.map(c => parseFloat(c.style.width) || 0);
+            const totalPx  = pxWidths.reduce((s, w) => s + w, 0);
+            if (totalPx > 0) {
+                colWidthsDxa = pxWidths.map(pxToDxa);
+            }
+        }
+
+        const physicalColumnCount = Math.max(colWidthsDxa.length, ...Array.from(tableEl.rows).map(row => Array.from(row.cells).reduce((count, cell) => count + (cell.colSpan || 1), 0)), 1);
+        while (colWidthsDxa.length < physicalColumnCount) colWidthsDxa.push(Math.floor(DOCX_TOTAL_W / physicalColumnCount));
+        const gridXml = `<w:tblGrid>${colWidthsDxa.map(width => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>`;
         const rows = tableEl.querySelectorAll('tr');
         let rowsXml = '';
-        
+
         rows.forEach(row => {
             const cells = row.querySelectorAll('th, td');
             let cellsXml = '';
-            
-            cells.forEach(cell => {
+            let gridColumn = 0;
+
+            cells.forEach((cell, ci) => {
                 const cellText = cell.textContent || '';
                 const textRuns = docxTextRunsFromMarkdownText(cellText);
-                
-                const cellCount = cells.length;
-                const totalWidth = 9000;
-                const cellWidth = Math.floor(totalWidth / cellCount);
-                
+
+                // Use saved col width if available, else distribute equally
+                const colspanCount = cell.colSpan || 1;
+                const cellWidth = colWidthsDxa.slice(gridColumn, gridColumn + colspanCount).reduce((total, width) => total + width, 0) ||
+                    Math.floor(DOCX_TOTAL_W / (cells.length || 1));
+
                 const isHeader = cell.tagName.toLowerCase() === 'th';
-                const cellBg = isHeader ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>' : '';
-                
+                const cellBg   = isHeader ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>' : '';
+
+                // Preserve colspan/rowspan
+                const colspan = cell.colSpan > 1 ? `<w:gridSpan w:val="${cell.colSpan}"/>` : '';
+                const rowspan = cell.rowSpan > 1 ? `<w:vMerge w:val="restart"/>` : '';
+
+                // Read cell alignment
+                const align = cell.style.textAlign === 'justify' ? 'both' : (cell.style.textAlign || 'left');
+                const verticalAlign = cell.style.verticalAlign === 'middle' ? 'center' : (cell.style.verticalAlign === 'bottom' ? 'bottom' : 'top');
+                const paddingTop = pxToDxa(cell.style.paddingTop || 7);
+                const paddingRight = pxToDxa(cell.style.paddingRight || 11);
+                const paddingBottom = pxToDxa(cell.style.paddingBottom || 7);
+                const paddingLeft = pxToDxa(cell.style.paddingLeft || 11);
+
                 cellsXml += `
                     <w:tc>
                         <w:tcPr>
                             <w:tcW w:w="${cellWidth}" w:type="dxa"/>
-                            ${cellBg}
+                            ${colspan}${rowspan}${cellBg}
+                            <w:tcMar><w:top w:w="${paddingTop}" w:type="dxa"/><w:right w:w="${paddingRight}" w:type="dxa"/><w:bottom w:w="${paddingBottom}" w:type="dxa"/><w:left w:w="${paddingLeft}" w:type="dxa"/></w:tcMar>
                             <w:tcBorders>
-                                <w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                                <w:top    w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                                 <w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
-                                <w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
-                                <w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                                <w:left   w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                                <w:right  w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                             </w:tcBorders>
-                            <w:vAlign w:val="center"/>
+                            <w:vAlign w:val="${verticalAlign}"/>
                         </w:tcPr>
-                        ${docxParagraph(textRuns, { before: 80, after: 80 })}
+                        ${docxParagraph(textRuns, { align, before: 80, after: 80 })}
                     </w:tc>
                 `;
+                gridColumn += colspanCount;
             });
-            
-            rowsXml += `<w:tr>${cellsXml}</w:tr>`;
+
+            // Preserve row height if set
+            const rowHeightPx = parseFloat(row.style.height);
+            const rowHeightDxa = rowHeightPx > 0
+                ? `<w:trHeight w:val="${pxToDxa(rowHeightPx)}" w:hRule="exact"/>` : '';
+
+            rowsXml += `<w:tr>${rowHeightDxa ? `<w:trPr>${rowHeightDxa}</w:trPr>` : ''}${cellsXml}</w:tr>`;
         });
-        
+
+        // Preserve table width if set
+        const tblWidthPx = parseFloat(tableEl.style.width);
+        const tblWidthDxa = tblWidthPx > 0
+            ? `<w:tblW w:w="${pxToDxa(tblWidthPx)}" w:type="dxa"/>`
+            : `<w:tblW w:w="${DOCX_TOTAL_W}" w:type="dxa"/>`;
+
         return `
             <w:tbl>
                 <w:tblPr>
-                    <w:tblW w:w="9000" w:type="dxa"/>
+                    ${tblWidthDxa}
                     <w:tblBorders>
-                        <w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                        <w:top    w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                         <w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
-                        <w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
-                        <w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                        <w:left   w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
+                        <w:right  w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                         <w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                         <w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>
                     </w:tblBorders>
                     <w:tblLayout w:type="fixed"/>
                 </w:tblPr>
+                ${gridXml}
                 ${rowsXml}
             </w:tbl>
         `;
     } catch (err) {
-        console.error("Error generating docx table:", err);
+        console.error('Error generating docx table:', err);
         return '';
     }
 }
@@ -4991,14 +5482,31 @@ function buildDocumentXml(paper, media) {
         body += `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
         body += docxParagraph([docxTextRun('ANSWER KEY', { bold: true, size: 28 })], { align: 'center', after: 120 });
         
+        // Reuse the existing correctIndex values and keep question numbers
+        // sequential across the section groups, matching the question paper.
+        const ANSWERS_PER_ROW = 5;
+        let answerQuestionNumber = 0;
         paper.sections.forEach(section => {
             if (!section.questions.length) return;
-            body += docxParagraph([docxTextRun(section.name, { bold: true, size: 22 })], { before: 100, after: 50 });
-            
-            section.questions.forEach((question, idx) => {
+            body += docxParagraph([docxTextRun(section.name, { bold: true, size: 22 })], { before: 80, after: 30 });
+
+            const answerEntries = section.questions.map(question => {
+                answerQuestionNumber += 1;
                 const answerLabel = LABELS[question.correctIndex] || 'A';
-                body += docxParagraph([docxTextRun(`${idx + 1} - ${answerLabel}`, { size: 20 })], { after: 30 });
+                return `${answerQuestionNumber} - ${answerLabel}`;
             });
+
+            // Keep each compact line as one DOCX paragraph. Tabs provide even,
+            // exam-style columns and rows wrap predictably after five answers.
+            for (let index = 0; index < answerEntries.length; index += ANSWERS_PER_ROW) {
+                const row = answerEntries.slice(index, index + ANSWERS_PER_ROW);
+                const runs = [];
+                row.forEach((entry, entryIndex) => {
+                    if (entryIndex) runs.push('<w:r><w:tab/></w:r>');
+                    runs.push(docxTextRun(entry, { size: 20 }));
+                });
+                body += docxParagraph(runs, { align: 'left', before: 0, after: 20 });
+            }
         });
     }
 
